@@ -9,7 +9,7 @@
 
 BerthWise turns vessel schedules into an optimized berth plan and a rehandle-minimal yard stacking plan. It was designed against a concrete crisis: the Port of Casablanca — handling ~65% of Morocco's foreign trade — saw throughput collapse from ~2,800 to ~800 containers/day, with vessels and trucks waiting hours at anchorage and gates. The four engines in this repo (berth allocation, yard stacking, ETA prediction, KPI command) attack exactly that kind of congestion.
 
-> **Live demo:** https://berthwise.vercel.app/demo *(deployment URL — update after first deploy)*
+> **Live demo:** deploy this repo to Vercel (zero-config Next.js) and open `/demo`.
 >
 > The demo runs entirely in the browser: 10 vessels inbound on Casablanca, 4 berths, 40 boxes in the yard. Tune congestion, toggle grain priority, and compare the AI plan against an FCFS baseline.
 
