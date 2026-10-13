@@ -112,13 +112,13 @@ const PROBLEMS = [
 const ENGINES = [
   {
     icon: CalendarClock,
-    title: "Berth allocation × 3",
-    body: "Greedy, simulated annealing, and tabu search race on the same vessel set — the winner is picked by your weighted objective. Grain-priority mode for harvest season.",
+    title: "Berth allocation × 5 + exact",
+    body: "Greedy, simulated annealing, tabu search, genetic algorithm, and ALNS race on the same vessel set — the winner is picked by your weighted objective. An exact branch-and-bound solver proves the optimum on small instances and grades every heuristic against it. Grain-priority mode for harvest season.",
   },
   {
     icon: Layers,
-    title: "Yard stacking",
-    body: "Best-fit by departure time: late-leaving boxes at the bottom, so retrievals never dig.",
+    title: "Yard stacking + relocation",
+    body: "Best-fit by departure time plus a true relocation simulation: blocking boxes are moved, not deleted, so re-relocation is counted. Expected-relocation stacking places each box where it will block the least.",
   },
   {
     icon: Radar,
@@ -127,8 +127,8 @@ const ENGINES = [
   },
   {
     icon: Gauge,
-    title: "Cranes, tides & KPIs",
-    body: "An 8-crane shared pool scheduled against every plan, tide windows for deep-draft entry, and waiting / fuel / crane-cost KPIs on every run.",
+    title: "Cranes, tides, robustness & KPIs",
+    body: "An 8-crane shared pool scheduled against every plan, tide windows for deep-draft entry, buffer-based robust planning against ±6h ETA slips with a measured price of robustness, and waiting / fuel / crane-cost KPIs on every run.",
   },
 ];
 
@@ -152,7 +152,7 @@ const ROI = [
 
 const FLOW = [
   { icon: Radar, step: "1", title: "ETA predictor" },
-  { icon: CalendarClock, step: "2", title: "Berth optimizer × 3" },
+  { icon: CalendarClock, step: "2", title: "Berth optimizer × 5 + exact" },
   { icon: Layers, step: "3", title: "Yard + crane scheduler" },
   { icon: Gauge, step: "4", title: "KPI dashboard" },
 ];

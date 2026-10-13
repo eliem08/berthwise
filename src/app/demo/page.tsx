@@ -18,6 +18,9 @@ import CompareCharts from "@/components/CompareCharts";
 import EtaTable from "@/components/EtaTable";
 import AlgorithmTable from "@/components/AlgorithmTable";
 import CraneChart from "@/components/CraneChart";
+import ResearchPanel from "@/components/ResearchPanel";
+import RobustPanel from "@/components/RobustPanel";
+import RelocationPanel from "@/components/RelocationPanel";
 import { compareAlgorithms, rebuildAfterMove, validateMove } from "@/lib/berth";
 import { stackNaive, stackOptimized } from "@/lib/yard";
 import { predictAll, applyPredictions } from "@/lib/eta";
@@ -43,7 +46,7 @@ import type {
   YardSolution,
 } from "@/lib/types";
 
-type Tab = "overview" | "algorithms" | "berth" | "cranes" | "yard" | "eta";
+type Tab = "overview" | "algorithms" | "berth" | "cranes" | "yard" | "eta" | "research" | "robust";
 
 interface ComputeResult {
   predictions: EtaPrediction[];
@@ -138,11 +141,13 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "cranes", label: "Cranes" },
   { id: "yard", label: "Yard stacking" },
   { id: "eta", label: "Vessel ETAs" },
+  { id: "research", label: "Research" },
+  { id: "robust", label: "Robustness" },
 ];
 
 const STEPS = [
   "Set objective weights",
-  "Compare 3 algorithms",
+  "Compare 5 algorithms",
   "Drag vessels on the Gantt",
 ];
 
@@ -300,7 +305,8 @@ export default function DemoPage() {
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-slate-300/85">
           Ten vessels inbound, four berths, eight shared cranes, forty boxes in
-          the yard. Tune the objective and watch three algorithms race.
+          the yard. Tune the objective and watch five algorithms race — then
+          grade them against the proven optimum on the Research tab.
         </p>
 
         {/* Guided steps */}
@@ -524,15 +530,18 @@ export default function DemoPage() {
                     <Info className="mt-0.5 h-5 w-5 shrink-0 text-tide-400" />
                     <p className="text-sm leading-relaxed text-slate-300">
                       <span className="font-semibold text-white">
-                        Why three algorithms?{" "}
+                        Why five algorithms?{" "}
                       </span>
                       Greedy is instant and explainable but short-sighted.
-                      Simulated annealing and tabu search both improve on it by
-                      relocating vessels — annealing accepts worse moves with a
-                      cooling probability, tabu forbids recent moves to escape
-                      local minima. On this 10-vessel set they usually land
-                      close; the table shows you when the extra search actually
-                      pays.
+                      Simulated annealing, tabu search, the genetic algorithm,
+                      and ALNS all improve on it by different search
+                      mechanisms — annealing accepts worse moves with a
+                      cooling probability, tabu forbids recent moves, the GA
+                      evolves a population of (order, berth) chromosomes, and
+                      ALNS destroys and rebuilds with regret-2 insertion.
+                      The table shows you when the extra search actually
+                      pays; the Research tab grades them against the proven
+                      optimum.
                     </p>
                   </div>
                 </div>
@@ -704,6 +713,11 @@ export default function DemoPage() {
               {tab === "yard" && (
                 <div className="space-y-6">
                   <YardVisualizer naive={result.yardBase} optimized={result.yardOpt} />
+                  <RelocationPanel
+                    boxes={YARD_BOXES}
+                    stackCount={YARD_CONFIG.stackCount}
+                    maxHeight={YARD_CONFIG.maxHeight}
+                  />
                   <div className="card flex items-start gap-3">
                     <Info className="mt-0.5 h-5 w-5 shrink-0 text-tide-400" />
                     <p className="text-sm leading-relaxed text-slate-300">
@@ -737,6 +751,26 @@ export default function DemoPage() {
                     </p>
                   </div>
                 </div>
+              )}
+
+              {tab === "research" && (
+                <ResearchPanel
+                  vessels={result.vesselsEff}
+                  berths={BERTHS}
+                  weights={weights}
+                  tidesEnabled={tidesEnabled}
+                  seed={seed}
+                />
+              )}
+
+              {tab === "robust" && (
+                <RobustPanel
+                  vessels={result.vesselsEff}
+                  berths={BERTHS}
+                  weights={weights}
+                  tidesEnabled={tidesEnabled}
+                  seed={seed}
+                />
               )}
             </>
           )}
