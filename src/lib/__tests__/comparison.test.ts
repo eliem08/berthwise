@@ -39,12 +39,12 @@ function assertPlanFeasible(plan: BerthPlan): void {
 }
 
 describe("algorithm comparison", () => {
-  it("all three algorithms produce feasible plans on seeded data", () => {
+  it("all five algorithms produce feasible plans on seeded data", () => {
     const { results } = compareAlgorithms(VESSELS, BERTHS, {
       seed: 42,
       timeLimitMs: 150,
     });
-    expect(results.map((r) => r.id)).toEqual(["greedy", "annealing", "tabu"]);
+    expect(results.map((r) => r.id)).toEqual(["greedy", "annealing", "tabu", "ga", "alns"]);
     for (const r of results) {
       assertPlanFeasible(r.plan);
       expect(r.economics.objective).toBeGreaterThanOrEqual(0);

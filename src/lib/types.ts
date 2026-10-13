@@ -120,7 +120,7 @@ export interface PlanEconomics {
   objective: number;
 }
 
-export type AlgorithmId = "greedy" | "annealing" | "tabu";
+export type AlgorithmId = "greedy" | "annealing" | "tabu" | "ga" | "alns" | "exact";
 
 export interface AlgorithmResult {
   id: AlgorithmId;
@@ -133,6 +133,90 @@ export interface AlgorithmResult {
 export interface ComparisonResult {
   results: AlgorithmResult[];
   winner: AlgorithmId;
+}
+
+/** Outcome of the exact branch-and-bound solver. */
+export interface ExactResult {
+  plan: BerthPlan;
+  /** Weighted objective of the optimal (or best-found) plan. */
+  objective: number;
+  /** True only when the search exhausted the tree below the node cap. */
+  provenOptimal: boolean;
+  nodesExplored: number;
+  /** Vessels included in the exact solve (unassigned excluded). */
+  vesselCount: number;
+  /** Objective of one row: heuristic objective vs exact optimum. */
+  gaps: Array<{ id: AlgorithmId; label: string; objective: number; gapPct: number | null }>;
+}
+
+/** One Cordeau-style benchmark instance (see benchmarks.ts for provenance). */
+export interface BenchmarkInstance {
+  id: string;
+  name: string;
+  description: string;
+  vessels: Vessel[];
+  berths: Berth[];
+  /** How ground truth was established for this instance. */
+  groundTruth: string;
+}
+
+export interface BenchmarkResult {
+  instanceId: string;
+  instanceName: string;
+  /** Exact optimum, when the instance is small enough to prove. */
+  exactObjective: number | null;
+  provenOptimal: boolean;
+  rows: Array<{ id: AlgorithmId; label: string; objective: number; gapPct: number | null }>;
+}
+
+/** One relocation move in a blocks-relocation simulation. */
+export interface RelocationMove {
+  boxId: string;
+  fromStack: number;
+  toStack: number;
+  /** Retrieval rank being served when the move happened. */
+  servingRank: number;
+}
+
+/** Full relocation (RSP) simulation of one yard stacking. */
+export interface RelocationResult {
+  /** Total relocation moves, counting re-relocations of the same box. */
+  rehandles: number;
+  moves: RelocationMove[];
+  /** How many times the most-moved box was relocated. */
+  maxRelocationsPerBox: number;
+  /** Boxes relocated more than once (the re-relocation phenomenon). */
+  boxesRelocatedTwice: number;
+}
+
+export interface StackingMethodRow {
+  method: string;
+  /** Legacy blocking count (blocking boxes vanish — see README). */
+  blockingRehandles: number;
+  /** Full relocation simulation (boxes persist and can block twice). */
+  relocationRehandles: number;
+  /** Yard delay added to truck turnaround, hours (proxy: 3 min per move). */
+  truckDelayHours: number;
+}
+
+/** One point on the robustness tradeoff curve. */
+export interface RobustPoint {
+  bufferHours: number;
+  /** Objective of the buffered plan, evaluated on nominal ETAs. */
+  nominalObjective: number;
+  /** (nominalObjective − nominalObjective₀) / nominalObjective₀, in %. */
+  costOfRobustnessPct: number;
+  /** Share of sampled ETA scenarios in which the plan stays within grace. */
+  feasibilityRate: number;
+  meanSlipHours: number;
+  worstSlipHours: number;
+}
+
+export interface RobustResult {
+  points: RobustPoint[];
+  samples: number;
+  graceHours: number;
+  uncertaintyHalfWidthHours: number;
 }
 
 /** Outcome of validating a drag-and-drop move on the Gantt. */

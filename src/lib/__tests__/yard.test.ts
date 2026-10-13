@@ -21,9 +21,9 @@ describe("countRehandles", () => {
     // first), so nothing ever blocks anything else.
     const stacks: Box[][] = [
       [
-        { id: "a", retrievalRank: 3 },
-        { id: "b", retrievalRank: 2 },
-        { id: "c", retrievalRank: 1 },
+        { id: "a", retrievalRank: 3, destination: "Test" },
+        { id: "b", retrievalRank: 2, destination: "Test" },
+        { id: "c", retrievalRank: 1, destination: "Test" },
       ],
     ];
 
@@ -35,8 +35,8 @@ describe("countRehandles", () => {
     // has to be moved out of the way: exactly one rehandle.
     const stacks: Box[][] = [
       [
-        { id: "a", retrievalRank: 1 },
-        { id: "b", retrievalRank: 2 },
+        { id: "a", retrievalRank: 1, destination: "Test" },
+        { id: "b", retrievalRank: 2, destination: "Test" },
       ],
     ];
 
