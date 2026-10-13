@@ -10,6 +10,9 @@ const METHOD_NOTES: Record<AlgorithmId, string> = {
   greedy: "FCFS: each vessel takes the feasible berth with the earliest start.",
   annealing: "Greedy start, then random relocate moves accepted by a cooling temperature schedule.",
   tabu: "Random relocate moves with a short-term memory that forbids recent (vessel, berth) moves unless they beat the best.",
+  ga: "Population of (order, berth) chromosomes; order crossover, swap mutation, elitism. Seeded by the greedy plan.",
+  alns: "Adaptive large neighbourhood search (Ropke & Pisinger 2006): destroy operators (random / worst-cost / time-window) + regret-2 repair, adaptive operator weights.",
+  exact: "Branch-and-bound: proves the optimum on ≤ 8-vessel instances. Shown on the Research tab, not in this race.",
 };
 
 export default function AlgorithmTable({
@@ -93,11 +96,13 @@ export default function AlgorithmTable({
         </table>
       </div>
       <p className="border-t border-harbor-800 px-5 py-3 text-xs leading-relaxed text-slate-500">
-        All three run on the same vessel set, weights, and tide setting; every
+        All five run on the same vessel set, weights, and tide setting; every
         plan is then crane-scheduled against the shared 8-crane pool. The
         winner minimises the weighted objective (waiting + fuel + crane cost,
         each normalised — see the sliders). Objective values are comparable
-        only within one weight setting.
+        only within one weight setting. For proof, see the Research tab:
+        the exact branch-and-bound solver grades every heuristic against
+        the proven optimum on small instances.
       </p>
     </section>
   );

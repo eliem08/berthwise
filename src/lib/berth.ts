@@ -15,6 +15,8 @@ import { mulberry32 } from "./rng";
 import { generateTideWindows, isInTideWindow, needsTideWindow, nextTideWindowStart } from "./tide";
 import { planEconomics, cranesForVessel, CRANE_POOL_LIMIT } from "./economics";
 import { cranesFreeAt, scheduleCranes } from "./cranes";
+import { planGA } from "./ga";
+import { planALNS } from "./alns";
 
 export type {
   AlgorithmId,
@@ -79,6 +81,13 @@ interface SweepOptions {
   tidesEnabled?: boolean;
   tideWindows?: TideWindow[];
   /** Per-vessel "not before" floors (used to honour drag-and-drop positions). */
+  notBefore?: Map<string, number>;
+}
+
+/** Options accepted by the exported sequencesToPlan helper. */
+export interface SequenceSweepOptions {
+  tidesEnabled?: boolean;
+  tideWindows?: TideWindow[];
   notBefore?: Map<string, number>;
 }
 
@@ -158,6 +167,42 @@ function buildPlan(
     makespanHours,
     berthBusyHours,
   };
+}
+
+/**
+ * Public entry point to the sweep: turn per-berth ordered vessel sequences
+ * into a concrete plan. Used by the GA, ALNS, and exact solver so every
+ * algorithm shares one feasibility/sweep semantics — a plan is feasible iff
+ * its sequences sweep without overlap, which the sweep guarantees by
+ * construction (start = max(ETA, previous end), tide-adjusted when enabled).
+ */
+export function sequencesToPlan(
+  seqs: Map<string, string[]>,
+  vessels: Vessel[],
+  opts: SequenceSweepOptions = {},
+): BerthPlan {
+  const vesselMap = new Map<string, Vessel>();
+  for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
+  return buildPlan(seqs, vesselMap, opts);
+}
+
+/**
+ * Per-berth sequences implied by a plan: assignments grouped by berth,
+ * ordered by start time. The inverse of sequencesToPlan up to re-sweeping.
+ */
+export function planToSequences(plan: BerthPlan): Map<string, string[]> {
+  const seqs = new Map<string, string[]>();
+  const byBerth = new Map<string, Assignment[]>();
+  for (const a of plan.assignments) {
+    const list = byBerth.get(a.berthId);
+    if (list) list.push(a);
+    else byBerth.set(a.berthId, [a]);
+  }
+  for (const [berthId, list] of byBerth) {
+    list.sort((x, y) => x.startHours - y.startHours || compareIds(x.vesselId, y.vesselId));
+    seqs.set(berthId, list.map((a) => a.vesselId));
+  }
+  return seqs;
 }
 
 /**
@@ -480,10 +525,10 @@ export function planTabu(
 }
 
 /**
- * Run greedy, simulated annealing, and tabu search on the same vessel set
- * with the same weights, crane-schedule every plan against the shared pool,
- * and pick the winner by weighted objective (ties resolved in
- * greedy → annealing → tabu order, so the result is deterministic).
+ * Run greedy, simulated annealing, tabu search, genetic algorithm, and ALNS
+ * on the same vessel set with the same weights, crane-schedule every plan
+ * against the shared pool, and pick the winner by weighted objective (ties
+ * resolved in greedy → annealing → tabu → GA → ALNS order, deterministic).
  */
 export function compareAlgorithms(
   vessels: Vessel[],
@@ -497,6 +542,8 @@ export function compareAlgorithms(
     { id: "greedy", label: "Greedy (FCFS)", fn: (v, b) => planNaive(v, b, opts) },
     { id: "annealing", label: "Simulated annealing", fn: (v, b) => planOptimized(v, b, opts) },
     { id: "tabu", label: "Tabu search", fn: (v, b) => planTabu(v, b, opts) },
+    { id: "ga", label: "Genetic algorithm", fn: (v, b) => planGA(v, b, opts) },
+    { id: "alns", label: "ALNS", fn: (v, b) => planALNS(v, b, opts) },
   ];
 
   const results: AlgorithmResult[] = runners.map((runner) => {
