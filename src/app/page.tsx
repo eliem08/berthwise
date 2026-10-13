@@ -112,8 +112,8 @@ const PROBLEMS = [
 const ENGINES = [
   {
     icon: CalendarClock,
-    title: "Berth allocation",
-    body: "Simulated annealing assigns every vessel to a berth and time slot, minimizing anchorage waiting. Grain-priority mode for harvest season.",
+    title: "Berth allocation × 3",
+    body: "Greedy, simulated annealing, and tabu search race on the same vessel set — the winner is picked by your weighted objective. Grain-priority mode for harvest season.",
   },
   {
     icon: Layers,
@@ -127,16 +127,16 @@ const ENGINES = [
   },
   {
     icon: Gauge,
-    title: "Command KPIs",
-    body: "Waiting time, berth utilization, rehandle rate and throughput — before vs after, on every run.",
+    title: "Cranes, tides & KPIs",
+    body: "An 8-crane shared pool scheduled against every plan, tide windows for deep-draft entry, and waiting / fuel / crane-cost KPIs on every run.",
   },
 ];
 
 const ROI = [
   {
     icon: Timer,
-    title: "−32% average waiting",
-    body: "In the demo scenario, optimized berth plans cut average anchorage waiting from 1.7h to 1.15h per vessel. Every waiting hour burns fuel and demurrage.",
+    title: "−58% average waiting",
+    body: "In the demo scenario, the winning algorithm cuts average anchorage waiting from 5.7h to 2.4h per vessel vs FCFS (tides and crane pool on). Every waiting hour burns fuel and demurrage.",
   },
   {
     icon: Layers,
@@ -152,8 +152,8 @@ const ROI = [
 
 const FLOW = [
   { icon: Radar, step: "1", title: "ETA predictor" },
-  { icon: CalendarClock, step: "2", title: "Berth optimizer" },
-  { icon: Layers, step: "3", title: "Yard optimizer" },
+  { icon: CalendarClock, step: "2", title: "Berth optimizer × 3" },
+  { icon: Layers, step: "3", title: "Yard + crane scheduler" },
   { icon: Gauge, step: "4", title: "KPI dashboard" },
 ];
 
