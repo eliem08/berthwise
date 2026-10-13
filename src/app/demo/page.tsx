@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronRight,
+  Download,
   Info,
   RotateCcw,
-  Ship,
-  Sparkles,
+  SlidersHorizontal,
+  Waves,
   Wheat,
 } from "lucide-react";
 import GanttChart from "@/components/GanttChart";
@@ -15,11 +16,15 @@ import YardVisualizer from "@/components/YardVisualizer";
 import KpiCards from "@/components/KpiCards";
 import CompareCharts from "@/components/CompareCharts";
 import EtaTable from "@/components/EtaTable";
-import { planNaive, planOptimized } from "@/lib/berth";
+import AlgorithmTable from "@/components/AlgorithmTable";
+import CraneChart from "@/components/CraneChart";
+import { compareAlgorithms, rebuildAfterMove, validateMove } from "@/lib/berth";
 import { stackNaive, stackOptimized } from "@/lib/yard";
 import { predictAll, applyPredictions } from "@/lib/eta";
 import { computeKpis, compareKpis } from "@/lib/kpi";
 import type { KpiDelta } from "@/lib/kpi";
+import { planToCsv } from "@/lib/csv";
+import { generateTideWindows } from "@/lib/tide";
 import {
   BERTHS,
   VESSELS,
@@ -29,38 +34,57 @@ import {
 } from "@/lib/data";
 import type {
   BerthPlan,
+  ComparisonResult,
+  CraneSchedule,
   EtaPrediction,
   Kpis,
+  ObjectiveWeights,
   Vessel,
   YardSolution,
 } from "@/lib/types";
 
-type Mode = "optimized" | "baseline";
-type Tab = "overview" | "berth" | "yard" | "eta";
+type Tab = "overview" | "algorithms" | "berth" | "cranes" | "yard" | "eta";
 
 interface ComputeResult {
   predictions: EtaPrediction[];
   vesselsEff: Vessel[];
-  planOpt: BerthPlan;
-  planBase: BerthPlan;
+  comparison: ComparisonResult;
   yardOpt: YardSolution;
   yardBase: YardSolution;
-  kpisOpt: Kpis;
-  kpisBase: Kpis;
+  kpisWinner: Kpis;
+  kpisGreedy: Kpis;
   deltas: KpiDelta[];
 }
 
-const DEFAULTS = { grainPriority: true, congestion: 0.55, seed: 42 };
+interface ManualPlan {
+  plan: BerthPlan;
+  craneSchedule: CraneSchedule;
+}
 
-function computeAll(grainPriority: boolean, congestion: number, seed: number): ComputeResult {
+const DEFAULTS = {
+  grainPriority: true,
+  congestion: 0.55,
+  seed: 42,
+  tidesEnabled: true,
+  weights: { waiting: 70, fuel: 20, crane: 10 } as ObjectiveWeights,
+};
+
+function computeAll(
+  grainPriority: boolean,
+  congestion: number,
+  seed: number,
+  weights: ObjectiveWeights,
+  tidesEnabled: boolean,
+): ComputeResult {
   const predictions = predictAll(VESSELS, VOYAGE_LEGS, congestion, seed);
   const vesselsEff = applyPredictions(VESSELS, predictions);
-  const planOpt = planOptimized(vesselsEff, BERTHS, {
+  const comparison = compareAlgorithms(vesselsEff, BERTHS, {
     grainPriority,
     seed,
-    timeLimitMs: 600,
+    timeLimitMs: 400,
+    weights,
+    tidesEnabled,
   });
-  const planBase = planNaive(vesselsEff, BERTHS);
   const yardOpt = stackOptimized(
     YARD_BOXES,
     YARD_CONFIG.stackCount,
@@ -71,18 +95,19 @@ function computeAll(grainPriority: boolean, congestion: number, seed: number): C
     YARD_CONFIG.stackCount,
     YARD_CONFIG.maxHeight,
   );
-  const kpisOpt = computeKpis(planOpt, yardOpt);
-  const kpisBase = computeKpis(planBase, yardBase);
-  const deltas = compareKpis(kpisBase, kpisOpt);
+  const winnerResult = comparison.results.find((r) => r.id === comparison.winner)!;
+  const greedyResult = comparison.results.find((r) => r.id === "greedy")!;
+  const kpisWinner = computeKpis(winnerResult.plan, yardOpt);
+  const kpisGreedy = computeKpis(greedyResult.plan, yardBase);
+  const deltas = compareKpis(kpisGreedy, kpisWinner);
   return {
     predictions,
     vesselsEff,
-    planOpt,
-    planBase,
+    comparison,
     yardOpt,
     yardBase,
-    kpisOpt,
-    kpisBase,
+    kpisWinner,
+    kpisGreedy,
     deltas,
   };
 }
@@ -108,32 +133,52 @@ function Skeleton() {
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
+  { id: "algorithms", label: "Algorithms" },
   { id: "berth", label: "Berth plan" },
+  { id: "cranes", label: "Cranes" },
   { id: "yard", label: "Yard stacking" },
   { id: "eta", label: "Vessel ETAs" },
 ];
 
 const STEPS = [
-  "Set port congestion",
-  "Toggle grain priority",
-  "Compare AI vs FCFS baseline",
+  "Set objective weights",
+  "Compare 3 algorithms",
+  "Drag vessels on the Gantt",
+];
+
+const WEIGHT_SLIDERS: Array<{
+  key: keyof ObjectiveWeights;
+  label: string;
+  hint: string;
+}> = [
+  { key: "waiting", label: "Waiting time", hint: "Anchorage hours" },
+  { key: "fuel", label: "Fuel burn", hint: "Tonnes at anchor" },
+  { key: "crane", label: "Crane cost", hint: "USD crane-hours" },
 ];
 
 export default function DemoPage() {
   const [grainPriority, setGrainPriority] = useState(DEFAULTS.grainPriority);
   const [congestion, setCongestion] = useState(DEFAULTS.congestion);
   const [seed, setSeed] = useState(DEFAULTS.seed);
-  const [mode, setMode] = useState<Mode>("optimized");
+  const [tidesEnabled, setTidesEnabled] = useState(DEFAULTS.tidesEnabled);
+  const [weights, setWeights] = useState<ObjectiveWeights>(DEFAULTS.weights);
   const [tab, setTab] = useState<Tab>("overview");
   const [computing, setComputing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ComputeResult | null>(null);
+  const [manualPlan, setManualPlan] = useState<ManualPlan | null>(null);
+  const [dragMessage, setDragMessage] = useState<{
+    kind: "success" | "error";
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     setComputing(true);
+    setManualPlan(null);
+    setDragMessage(null);
     const t = setTimeout(() => {
       try {
-        setResult(computeAll(grainPriority, congestion, seed));
+        setResult(computeAll(grainPriority, congestion, seed, weights, tidesEnabled));
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown planning error");
@@ -142,15 +187,20 @@ export default function DemoPage() {
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [grainPriority, congestion, seed]);
+  }, [grainPriority, congestion, seed, tidesEnabled, weights.waiting, weights.fuel, weights.crane]);
 
-  const plan = useMemo(
-    () => (result ? (mode === "optimized" ? result.planOpt : result.planBase) : null),
-    [result, mode],
+  const winnerResult = useMemo(
+    () => result?.comparison.results.find((r) => r.id === result.comparison.winner) ?? null,
+    [result],
   );
-  const kpis = useMemo(
-    () => (result ? (mode === "optimized" ? result.kpisOpt : result.kpisBase) : null),
-    [result, mode],
+
+  const displayedPlan = useMemo(
+    () => manualPlan?.plan ?? winnerResult?.plan ?? null,
+    [manualPlan, winnerResult],
+  );
+  const displayedSchedule = useMemo(
+    () => manualPlan?.craneSchedule ?? winnerResult?.craneSchedule ?? null,
+    [manualPlan, winnerResult],
   );
 
   const vesselById = useMemo(
@@ -158,19 +208,86 @@ export default function DemoPage() {
     [result],
   );
   const berthById = useMemo(() => new Map(BERTHS.map((b) => [b.id, b])), []);
+
   const sortedAssignments = useMemo(
     () =>
-      (plan?.assignments ?? [])
+      (displayedPlan?.assignments ?? [])
         .slice()
         .sort((a, b) => a.startHours - b.startHours),
-    [plan],
+    [displayedPlan],
+  );
+
+  const tideWindows = useMemo(
+    () =>
+      tidesEnabled && displayedPlan
+        ? generateTideWindows(displayedPlan.makespanHours + 24)
+        : [],
+    [tidesEnabled, displayedPlan],
   );
 
   function resetAll() {
     setGrainPriority(DEFAULTS.grainPriority);
     setCongestion(DEFAULTS.congestion);
     setSeed(DEFAULTS.seed);
-    setMode("optimized");
+    setTidesEnabled(DEFAULTS.tidesEnabled);
+    setWeights(DEFAULTS.weights);
+    setManualPlan(null);
+    setDragMessage(null);
+  }
+
+  function handleMove(vesselId: string, targetBerthId: string, requestedStart: number) {
+    if (!result || !displayedPlan) return;
+    const validation = validateMove(
+      displayedPlan,
+      result.vesselsEff,
+      BERTHS,
+      vesselId,
+      targetBerthId,
+      requestedStart,
+      { tidesEnabled },
+    );
+    if (!validation.valid) {
+      setDragMessage({ kind: "error", text: validation.reason ?? "Move rejected." });
+      return;
+    }
+    try {
+      const rebuilt = rebuildAfterMove(
+        displayedPlan,
+        result.vesselsEff,
+        BERTHS,
+        vesselId,
+        targetBerthId,
+        requestedStart,
+        { tidesEnabled },
+      );
+      const moved = rebuilt.plan.assignments.find((a) => a.vesselId === vesselId);
+      const vessel = vesselById.get(vesselId);
+      const berth = berthById.get(targetBerthId);
+      setManualPlan({ plan: rebuilt.plan, craneSchedule: rebuilt.craneSchedule });
+      setDragMessage({
+        kind: "success",
+        text: `${vessel?.name ?? vesselId} moved to ${berth?.name ?? targetBerthId}, starting h+${(moved?.startHours ?? requestedStart).toFixed(1)}. Total waiting is now ${rebuilt.plan.totalWaitingHours.toFixed(1)}h.`,
+      });
+    } catch (e) {
+      setDragMessage({
+        kind: "error",
+        text: e instanceof Error ? e.message : "Could not apply the move.",
+      });
+    }
+  }
+
+  function exportCsv() {
+    if (!result || !displayedPlan || !displayedSchedule) return;
+    const csv = planToCsv(displayedPlan, result.vesselsEff, BERTHS, displayedSchedule);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `berth-plan-seed-${seed}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -182,8 +299,8 @@ export default function DemoPage() {
           The optimization loop, live.
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-slate-300/85">
-          Ten vessels inbound, four berths, forty boxes in the yard. Tune the
-          scenario and watch the plan rebuild.
+          Ten vessels inbound, four berths, eight shared cranes, forty boxes in
+          the yard. Tune the objective and watch three algorithms race.
         </p>
 
         {/* Guided steps */}
@@ -203,101 +320,137 @@ export default function DemoPage() {
 
         {/* Controls */}
         <div className="card mt-6">
-          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Planning mode
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <SlidersHorizontal className="h-3.5 w-3.5" /> Objective weights
               </p>
-              <div className="flex rounded-xl border border-harbor-600 p-1">
-                <button
-                  onClick={() => setMode("optimized")}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-                    mode === "optimized"
-                      ? "bg-signal-400 text-harbor-950"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                >
-                  <Sparkles className="h-4 w-4" /> AI optimized
-                </button>
-                <button
-                  onClick={() => setMode("baseline")}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-                    mode === "baseline"
-                      ? "bg-signal-400 text-harbor-950"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                >
-                  <Ship className="h-4 w-4" /> FCFS baseline
-                </button>
+              <div className="space-y-3">
+                {WEIGHT_SLIDERS.map((s) => (
+                  <div key={s.key}>
+                    <div className="flex items-baseline justify-between">
+                      <label className="text-sm font-medium text-slate-200">{s.label}</label>
+                      <span className="font-mono text-xs text-slate-400">{weights[s.key]}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={weights[s.key]}
+                      onChange={(e) =>
+                        setWeights((w) => ({ ...w, [s.key]: Number(e.target.value) }))
+                      }
+                      className="w-full accent-amber-500"
+                      aria-label={`${s.label} weight`}
+                    />
+                    <p className="text-xs text-slate-500">{s.hint}</p>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Grain priority
-              </p>
-              <button
-                onClick={() => setGrainPriority((v) => !v)}
-                className={`flex w-full items-center justify-between rounded-xl border px-4 py-2.5 transition-colors ${
-                  grainPriority
-                    ? "border-signal-400 bg-signal-400/10"
-                    : "border-harbor-600 hover:border-slate-500"
-                }`}
-              >
-                <span className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-                  <Wheat className="h-4 w-4 text-signal-400" />
-                  Grain bulkers first
-                </span>
-                <span
-                  className={`rounded-full px-2.5 py-0.5 font-mono text-xs font-bold ${
+            <div className="space-y-4">
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Grain priority
+                </p>
+                <button
+                  onClick={() => setGrainPriority((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-4 py-2.5 transition-colors ${
                     grainPriority
-                      ? "bg-signal-400 text-harbor-950"
-                      : "bg-harbor-700 text-slate-400"
+                      ? "border-signal-400 bg-signal-400/10"
+                      : "border-harbor-600 hover:border-slate-500"
                   }`}
                 >
-                  {grainPriority ? "ON" : "OFF"}
-                </span>
-              </button>
-            </div>
-
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Port congestion · {Math.round(congestion * 100)}%
-              </p>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={congestion}
-                onChange={(e) => setCongestion(Number(e.target.value))}
-                className="w-full accent-amber-500"
-                aria-label="Port congestion"
-              />
-              <p className="mt-1 text-xs text-slate-500">Drives ETA delays</p>
-            </div>
-
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Random seed
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  value={seed}
-                  onChange={(e) => setSeed(Math.floor(Number(e.target.value) || 0))}
-                  className="w-full rounded-xl border border-harbor-600 bg-harbor-850 px-3 py-2.5 font-mono text-sm text-white focus:border-signal-400 focus:outline-none"
-                  aria-label="Random seed"
-                />
-                <button
-                  onClick={resetAll}
-                  title="Reset all controls"
-                  className="flex items-center justify-center rounded-xl border border-harbor-600 px-3.5 text-slate-300 transition-colors hover:border-signal-400 hover:text-signal-300"
-                >
-                  <RotateCcw className="h-4 w-4" />
+                  <span className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+                    <Wheat className="h-4 w-4 text-signal-400" />
+                    Grain bulkers first
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 font-mono text-xs font-bold ${
+                      grainPriority
+                        ? "bg-signal-400 text-harbor-950"
+                        : "bg-harbor-700 text-slate-400"
+                    }`}
+                  >
+                    {grainPriority ? "ON" : "OFF"}
+                  </span>
                 </button>
               </div>
-              <p className="mt-1 text-xs text-slate-500">Same seed → same plan</p>
+
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Tide windows
+                </p>
+                <button
+                  onClick={() => setTidesEnabled((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-4 py-2.5 transition-colors ${
+                    tidesEnabled
+                      ? "border-cyan-400/60 bg-cyan-400/10"
+                      : "border-harbor-600 hover:border-slate-500"
+                  }`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+                    <Waves className="h-4 w-4 text-cyan-300" />
+                    Deep-draft entry windows
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 font-mono text-xs font-bold ${
+                      tidesEnabled
+                        ? "bg-cyan-400 text-harbor-950"
+                        : "bg-harbor-700 text-slate-400"
+                    }`}
+                  >
+                    {tidesEnabled ? "ON" : "OFF"}
+                  </span>
+                </button>
+                <p className="mt-1 text-xs text-slate-500">
+                  Vessels drawing ≥12m may only berth at high water
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Port congestion · {Math.round(congestion * 100)}%
+                </p>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={congestion}
+                  onChange={(e) => setCongestion(Number(e.target.value))}
+                  className="w-full accent-amber-500"
+                  aria-label="Port congestion"
+                />
+                <p className="mt-1 text-xs text-slate-500">Drives ETA delays</p>
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Random seed
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={seed}
+                    onChange={(e) => setSeed(Math.floor(Number(e.target.value) || 0))}
+                    className="w-full rounded-xl border border-harbor-600 bg-harbor-850 px-3 py-2.5 font-mono text-sm text-white focus:border-signal-400 focus:outline-none"
+                    aria-label="Random seed"
+                  />
+                  <button
+                    onClick={resetAll}
+                    title="Reset all controls"
+                    className="flex items-center justify-center rounded-xl border border-harbor-600 px-3.5 text-slate-300 transition-colors hover:border-signal-400 hover:text-signal-300"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">Same seed → same plan</p>
+              </div>
             </div>
           </div>
         </div>
@@ -338,13 +491,13 @@ export default function DemoPage() {
 
         {/* Content */}
         <div className="mt-6">
-          {computing || !result || !plan || !kpis ? (
+          {computing || !result || !displayedPlan || !displayedSchedule ? (
             <Skeleton />
           ) : (
             <>
               {tab === "overview" && (
                 <div className="space-y-6">
-                  <KpiCards kpis={kpis} />
+                  <KpiCards kpis={result.kpisWinner} />
                   <CompareCharts deltas={result.deltas} />
                   <div className="card flex items-start gap-3">
                     <Info className="mt-0.5 h-5 w-5 shrink-0 text-tide-400" />
@@ -361,30 +514,80 @@ export default function DemoPage() {
                 </div>
               )}
 
+              {tab === "algorithms" && (
+                <div className="space-y-6">
+                  <AlgorithmTable
+                    results={result.comparison.results}
+                    winner={result.comparison.winner}
+                  />
+                  <div className="card flex items-start gap-3">
+                    <Info className="mt-0.5 h-5 w-5 shrink-0 text-tide-400" />
+                    <p className="text-sm leading-relaxed text-slate-300">
+                      <span className="font-semibold text-white">
+                        Why three algorithms?{" "}
+                      </span>
+                      Greedy is instant and explainable but short-sighted.
+                      Simulated annealing and tabu search both improve on it by
+                      relocating vessels — annealing accepts worse moves with a
+                      cooling probability, tabu forbids recent moves to escape
+                      local minima. On this 10-vessel set they usually land
+                      close; the table shows you when the extra search actually
+                      pays.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {tab === "berth" && (
                 <div className="space-y-6">
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full border border-harbor-600 bg-harbor-850 px-3 py-1 font-mono text-xs text-slate-300">
-                      {mode === "optimized" ? "AI optimized" : "FCFS baseline"}
+                      {manualPlan ? "Manual edit" : `${winnerResult?.label ?? "Optimized"} plan`}
                     </span>
                     <span className="rounded-full border border-harbor-600 bg-harbor-850 px-3 py-1 font-mono text-xs text-slate-300">
                       grain priority {grainPriority ? "on" : "off"}
                     </span>
                     <span className="rounded-full border border-harbor-600 bg-harbor-850 px-3 py-1 font-mono text-xs text-slate-300">
+                      tides {tidesEnabled ? "on" : "off"}
+                    </span>
+                    <span className="rounded-full border border-harbor-600 bg-harbor-850 px-3 py-1 font-mono text-xs text-slate-300">
                       seed {seed}
                     </span>
+                    <div className="ml-auto flex flex-wrap gap-2">
+                      {manualPlan && (
+                        <button
+                          onClick={() => {
+                            setManualPlan(null);
+                            setDragMessage(null);
+                          }}
+                          className="flex items-center gap-1.5 rounded-xl border border-harbor-600 px-3.5 py-2 text-sm font-semibold text-slate-200 transition-colors hover:border-signal-400 hover:text-signal-300"
+                        >
+                          <RotateCcw className="h-4 w-4" /> Back to optimized plan
+                        </button>
+                      )}
+                      <button
+                        onClick={exportCsv}
+                        className="flex items-center gap-1.5 rounded-xl bg-signal-400 px-3.5 py-2 text-sm font-bold text-harbor-950 transition-colors hover:bg-signal-300"
+                      >
+                        <Download className="h-4 w-4" /> Export CSV
+                      </button>
+                    </div>
                   </div>
                   <GanttChart
-                    plan={plan}
+                    plan={displayedPlan}
                     vessels={result.vesselsEff}
                     berths={BERTHS}
+                    tideWindows={tideWindows}
+                    draggable
+                    onMove={handleMove}
+                    dragMessage={dragMessage}
                   />
-                  {plan.unassigned.length > 0 && (
+                  {displayedPlan.unassigned.length > 0 && (
                     <div className="flex items-start gap-3 rounded-2xl border border-red-800 bg-red-950 p-4">
                       <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
                       <p className="text-sm text-red-300">
-                        {plan.unassigned.length} vessel(s) could not be placed:{" "}
-                        {plan.unassigned.join(", ")}. No feasible berth (length
+                        {displayedPlan.unassigned.length} vessel(s) could not be placed:{" "}
+                        {displayedPlan.unassigned.join(", ")}. No feasible berth (length
                         or grain capability).
                       </p>
                     </div>
@@ -441,6 +644,56 @@ export default function DemoPage() {
                               </tr>
                             );
                           })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {tab === "cranes" && (
+                <div className="space-y-6">
+                  <CraneChart schedule={displayedSchedule} />
+                  <div className="card overflow-hidden p-0">
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[560px] text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-harbor-700 text-xs uppercase tracking-wider text-slate-500">
+                            <th className="px-5 py-3 font-semibold">Vessel</th>
+                            <th className="px-5 py-3 font-semibold">Berth</th>
+                            <th className="px-5 py-3 font-semibold">Cranes</th>
+                            <th className="px-5 py-3 font-semibold">Crane-hours</th>
+                            <th className="px-5 py-3 font-semibold">Working window</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {displayedSchedule.assignments
+                            .slice()
+                            .sort((a, b) => a.startHours - b.startHours)
+                            .map((c) => {
+                              const v = vesselById.get(c.vesselId);
+                              const b = berthById.get(c.berthId);
+                              return (
+                                <tr
+                                  key={c.vesselId}
+                                  className="border-b border-harbor-800 last:border-0 hover:bg-harbor-850"
+                                >
+                                  <td className="px-5 py-3 font-semibold text-white">
+                                    {v?.name ?? c.vesselId}
+                                  </td>
+                                  <td className="px-5 py-3 text-slate-300">
+                                    {b?.name ?? c.berthId}
+                                  </td>
+                                  <td className="px-5 py-3 font-mono text-slate-300">{c.cranes}</td>
+                                  <td className="px-5 py-3 font-mono text-slate-300">
+                                    {c.craneHours.toFixed(0)}
+                                  </td>
+                                  <td className="px-5 py-3 font-mono text-slate-300">
+                                    h+{c.startHours.toFixed(1)} – h+{c.endHours.toFixed(1)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                         </tbody>
                       </table>
                     </div>
