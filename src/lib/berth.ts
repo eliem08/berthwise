@@ -1,14 +1,47 @@
-import type { Assignment, Berth, BerthPlan, PlanOptions, Vessel } from "./types";
+import type {
+  AlgorithmId,
+  AlgorithmResult,
+  Assignment,
+  Berth,
+  BerthPlan,
+  ComparisonResult,
+  DragValidation,
+  ObjectiveWeights,
+  PlanOptions,
+  TideWindow,
+  Vessel,
+} from "./types";
 import { mulberry32 } from "./rng";
+import { generateTideWindows, isInTideWindow, needsTideWindow, nextTideWindowStart } from "./tide";
+import { planEconomics, cranesForVessel, CRANE_POOL_LIMIT } from "./economics";
+import { cranesFreeAt, scheduleCranes } from "./cranes";
+
+export type {
+  AlgorithmId,
+  AlgorithmResult,
+  Assignment,
+  Berth,
+  BerthPlan,
+  ComparisonResult,
+  DragValidation,
+  ObjectiveWeights,
+  PlanOptions,
+  TideWindow,
+  Vessel,
+} from "./types";
 
 /** Simulated-annealing tuning constants. */
 const SA_TEMP_START = 8;
 const SA_TEMP_END = 0.02;
-const MAKESPAN_WEIGHT = 0.05;
 /** Iterations per millisecond of time budget — keeps runs deterministic. */
 const ITERATIONS_PER_MS = 200;
 const DEFAULT_SEED = 42;
 const DEFAULT_TIME_LIMIT_MS = 500;
+/** Tabu tenure: how many iterations a (vessel, berth) move stays forbidden. */
+const TABU_TENURE = 12;
+/** Candidate moves sampled per tabu iteration. */
+const TABU_CANDIDATES_PER_ITERATION = 8;
+const EPS = 1e-9;
 
 /**
  * A vessel can only be moored at a berth that is long enough for it, and grain
@@ -34,6 +67,21 @@ function cloneSeqs(seqs: Map<string, string[]>): Map<string, string[]> {
   return out;
 }
 
+function tideHorizon(vessels: Vessel[]): number {
+  return (
+    Math.max(0, ...vessels.map((v) => v.etaHours)) +
+    vessels.reduce((s, v) => s + v.handlingHours, 0) +
+    48
+  );
+}
+
+interface SweepOptions {
+  tidesEnabled?: boolean;
+  tideWindows?: TideWindow[];
+  /** Per-vessel "not before" floors (used to honour drag-and-drop positions). */
+  notBefore?: Map<string, number>;
+}
+
 /**
  * Sweeps each berth's ordered vessel sequence into concrete assignments.
  *
@@ -41,11 +89,20 @@ function cloneSeqs(seqs: Map<string, string[]>): Map<string, string[]> {
  *   start = max(vessel.etaHours, previousEnd)
  *   end   = start + vessel.handlingHours
  *
- * Because a berth is swept sequentially, no two assignments on the same berth
- * can ever overlap. Vessels that do not appear in any sequence are reported as
- * unassigned.
+ * With tides enabled, deep-draft vessels additionally wait for the next
+ * high-water window before starting. Because a berth is swept sequentially,
+ * no two assignments on the same berth can ever overlap. Vessels that do
+ * not appear in any sequence are reported as unassigned.
  */
-function buildPlan(seqs: Map<string, string[]>, vessels: Map<string, Vessel>): BerthPlan {
+function buildPlan(
+  seqs: Map<string, string[]>,
+  vessels: Map<string, Vessel>,
+  opts: SweepOptions = {},
+): BerthPlan {
+  const tidesEnabled = opts.tidesEnabled ?? false;
+  const vesselList = [...vessels.values()];
+  const tideWindows = opts.tideWindows ?? generateTideWindows(tideHorizon(vesselList));
+
   const assignments: Assignment[] = [];
   const berthBusyHours: Record<string, number> = {};
   const placed = new Set<string>();
@@ -61,7 +118,12 @@ function buildPlan(seqs: Map<string, string[]>, vessels: Map<string, Vessel>): B
       const vessel = vessels.get(vesselId);
       if (!vessel) continue;
 
-      const startHours = Math.max(vessel.etaHours, previousEnd);
+      let startHours = Math.max(vessel.etaHours, previousEnd);
+      const floor = opts.notBefore?.get(vesselId);
+      if (floor !== undefined) startHours = Math.max(startHours, floor);
+      if (tidesEnabled && needsTideWindow(vessel)) {
+        startHours = nextTideWindowStart(startHours, tideWindows);
+      }
       const endHours = startHours + vessel.handlingHours;
       const waitingHours = Math.max(0, startHours - vessel.etaHours);
 
@@ -103,12 +165,18 @@ function buildPlan(seqs: Map<string, string[]>, vessels: Map<string, Vessel>): B
  *
  * Vessels are consumed in the given order. Each vessel is placed on the
  * feasible berth that yields the earliest start time
- * (max(eta, berthAvailable)), with ties broken by berth id. Vessels with no
- * feasible berth are simply skipped (they end up unassigned).
+ * (max(eta, berthAvailable), tide-adjusted when enabled), with ties broken
+ * by berth id. Vessels with no feasible berth are simply skipped (they end
+ * up unassigned).
  */
-function greedySequences(ordered: Vessel[], berths: Berth[]): Map<string, string[]> {
+function greedySequences(
+  ordered: Vessel[],
+  berths: Berth[],
+  opts: SweepOptions = {},
+): Map<string, string[]> {
   const seqs = new Map<string, string[]>();
   const berthAvailable = new Map<string, number>();
+  const tideWindows = opts.tideWindows ?? generateTideWindows(tideHorizon(ordered));
 
   for (const berth of berths) {
     seqs.set(berth.id, []);
@@ -123,7 +191,10 @@ function greedySequences(ordered: Vessel[], berths: Berth[]): Map<string, string
       if (!berthFeasible(vessel, berth)) continue;
 
       const available = berthAvailable.get(berth.id) ?? 0;
-      const start = Math.max(vessel.etaHours, available);
+      let start = Math.max(vessel.etaHours, available);
+      if (opts.tidesEnabled && needsTideWindow(vessel)) {
+        start = nextTideWindowStart(start, tideWindows);
+      }
 
       if (
         start < bestStart ||
@@ -145,26 +216,132 @@ function greedySequences(ordered: Vessel[], berths: Berth[]): Map<string, string
   return seqs;
 }
 
+/** Vessel ordering for greedy construction (ETA order, grain-first optional). */
+function orderedVessels(vessels: Vessel[], grainPriority: boolean): Vessel[] {
+  return vessels.slice().sort((a, b) => {
+    if (grainPriority) {
+      const ga = a.cargo === "grain" ? 0 : 1;
+      const gb = b.cargo === "grain" ? 0 : 1;
+      if (ga !== gb) return ga - gb;
+    }
+    return a.etaHours - b.etaHours || compareIds(a.id, b.id);
+  });
+}
+
+function sweepOpts(opts: PlanOptions): SweepOptions {
+  return { tidesEnabled: opts.tidesEnabled ?? false, tideWindows: undefined };
+}
+
 /**
  * First-come-first-served baseline: vessels are processed in ETA order
  * (ties broken by id) and each one takes the feasible berth that lets it start
- * earliest.
+ * earliest. This is the "greedy" algorithm in the comparison view.
  */
-export function planNaive(vessels: Vessel[], berths: Berth[]): BerthPlan {
+export function planNaive(vessels: Vessel[], berths: Berth[], opts: PlanOptions = {}): BerthPlan {
   const vesselMap = new Map<string, Vessel>();
   for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
 
-  const ordered = vessels
-    .slice()
-    .sort((a, b) => a.etaHours - b.etaHours || compareIds(a.id, b.id));
-
-  const seqs = greedySequences(ordered, berths);
-  return buildPlan(seqs, vesselMap);
+  const ordered = orderedVessels(vessels, opts.grainPriority ?? false);
+  const seqs = greedySequences(ordered, berths, sweepOpts(opts));
+  return buildPlan(seqs, vesselMap, sweepOpts(opts));
 }
 
-/** Objective: waiting dominates, makespan is a mild secondary term. */
-function objective(plan: BerthPlan): number {
-  return plan.totalWaitingHours + MAKESPAN_WEIGHT * plan.makespanHours;
+/** Alias: the greedy algorithm in the three-way comparison. */
+export const planGreedy = planNaive;
+
+/** Weighted multi-objective value of a plan (lower is better). */
+function objective(
+  plan: BerthPlan,
+  vessels: Vessel[],
+  berths: Berth[],
+  weights: ObjectiveWeights,
+): number {
+  return planEconomics(plan, vessels, berths, weights).objective;
+}
+
+interface MoveContext {
+  movable: Vessel[];
+  feasibleBerths: Map<string, Berth[]>;
+  location: Map<string, string>;
+}
+
+/** One random relocate move: a vessel to a random position on a random feasible berth. */
+function randomMove(
+  seqs: Map<string, string[]>,
+  ctx: MoveContext,
+  rand: () => number,
+): { nextSeqs: Map<string, string[]>; vesselId: string; targetBerthId: string } | null {
+  const vessel = ctx.movable[Math.floor(rand() * ctx.movable.length)];
+  const candidates = ctx.feasibleBerths.get(vessel.id);
+  if (!candidates || candidates.length === 0) return null;
+
+  const nextSeqs = cloneSeqs(seqs);
+  const fromBerthId = ctx.location.get(vessel.id);
+  if (fromBerthId !== undefined) {
+    const fromList = nextSeqs.get(fromBerthId);
+    if (fromList) {
+      const idx = fromList.indexOf(vessel.id);
+      if (idx >= 0) fromList.splice(idx, 1);
+    }
+  }
+
+  const targetBerth = candidates[Math.floor(rand() * candidates.length)];
+  const targetList = nextSeqs.get(targetBerth.id);
+  if (!targetList) return null;
+
+  const insertAt = Math.floor(rand() * (targetList.length + 1));
+  targetList.splice(insertAt, 0, vessel.id);
+  return { nextSeqs, vesselId: vessel.id, targetBerthId: targetBerth.id };
+}
+
+function setupSearch(
+  vessels: Vessel[],
+  berths: Berth[],
+  opts: PlanOptions,
+): {
+  vesselMap: Map<string, Vessel>;
+  currentSeqs: Map<string, string[]>;
+  currentCost: number;
+  bestPlan: BerthPlan;
+  bestCost: number;
+  ctx: MoveContext;
+  sweep: SweepOptions;
+  weights: ObjectiveWeights;
+} {
+  const vesselMap = new Map<string, Vessel>();
+  for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
+
+  const sweep = sweepOpts(opts);
+  const weights = opts.weights ?? { waiting: 1, fuel: 0, crane: 0 };
+  const ordered = orderedVessels(vessels, opts.grainPriority ?? false);
+
+  const currentSeqs = greedySequences(ordered, berths, sweep);
+  const initialPlan = buildPlan(currentSeqs, vesselMap, sweep);
+  const currentCost = objective(initialPlan, vessels, berths, weights);
+
+  const feasibleBerths = new Map<string, Berth[]>();
+  const movable: Vessel[] = [];
+  for (const vessel of vessels) {
+    const list = berths.filter((berth) => berthFeasible(vessel, berth));
+    feasibleBerths.set(vessel.id, list);
+    if (list.length > 0) movable.push(vessel);
+  }
+
+  const location = new Map<string, string>();
+  for (const [berthId, list] of currentSeqs) {
+    for (const vesselId of list) location.set(vesselId, berthId);
+  }
+
+  return {
+    vesselMap,
+    currentSeqs,
+    currentCost,
+    bestPlan: initialPlan,
+    bestCost: currentCost,
+    ctx: { movable, feasibleBerths, location },
+    sweep,
+    weights,
+  };
 }
 
 /**
@@ -185,94 +362,39 @@ export function planOptimized(
 ): BerthPlan {
   const seed = opts.seed ?? DEFAULT_SEED;
   const timeLimitMs = opts.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
-  const grainPriority = opts.grainPriority ?? false;
 
-  const vesselMap = new Map<string, Vessel>();
-  for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
-
-  // --- Ordering -----------------------------------------------------------
-  const ordered = vessels.slice().sort((a, b) => {
-    if (grainPriority) {
-      const ga = a.cargo === "grain" ? 0 : 1;
-      const gb = b.cargo === "grain" ? 0 : 1;
-      if (ga !== gb) return ga - gb;
-    }
-    return a.etaHours - b.etaHours || compareIds(a.id, b.id);
-  });
-
-  // --- Initial solution ---------------------------------------------------
-  let currentSeqs = greedySequences(ordered, berths);
-  let currentCost = objective(buildPlan(currentSeqs, vesselMap));
-
-  let bestPlan = buildPlan(currentSeqs, vesselMap);
-  let bestCost = currentCost;
-
-  if (vessels.length === 0 || berths.length === 0) return bestPlan;
-
-  // --- Precomputed feasibility -------------------------------------------
-  const feasibleBerths = new Map<string, Berth[]>();
-  const movable: Vessel[] = [];
-  for (const vessel of vessels) {
-    const list = berths.filter((berth) => berthFeasible(vessel, berth));
-    feasibleBerths.set(vessel.id, list);
-    if (list.length > 0) movable.push(vessel);
+  if (vessels.length === 0 || berths.length === 0) {
+    return buildPlan(new Map(), new Map(), sweepOpts(opts));
   }
 
-  if (movable.length === 0) return bestPlan;
+  const s = setupSearch(vessels, berths, opts);
+  if (s.ctx.movable.length === 0) return s.bestPlan;
 
-  // vesselId -> berthId currently holding it
-  const location = new Map<string, string>();
-  for (const [berthId, list] of currentSeqs) {
-    for (const vesselId of list) location.set(vesselId, berthId);
-  }
+  let currentSeqs = s.currentSeqs;
+  let currentCost = s.currentCost;
+  let bestPlan = s.bestPlan;
+  let bestCost = s.bestCost;
 
-  // --- Annealing loop -----------------------------------------------------
-  // Fixed iteration budget (derived from timeLimitMs) instead of wall-clock
-  // timing, so identical inputs + seed always produce identical output.
   const rand = mulberry32(seed);
   const maxIterations = Math.max(64, Math.floor(timeLimitMs * ITERATIONS_PER_MS));
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     const progress = maxIterations <= 1 ? 1 : iteration / (maxIterations - 1);
-    const temperature =
-      SA_TEMP_START * Math.pow(SA_TEMP_END / SA_TEMP_START, progress);
+    const temperature = SA_TEMP_START * Math.pow(SA_TEMP_END / SA_TEMP_START, progress);
 
-    // Pick a random movable vessel.
-    const vessel = movable[Math.floor(rand() * movable.length)];
-    const candidates = feasibleBerths.get(vessel.id);
-    if (!candidates || candidates.length === 0) continue;
+    const move = randomMove(currentSeqs, s.ctx, rand);
+    if (!move) continue;
 
-    // Work on a clone so the current solution is never mutated.
-    const nextSeqs = cloneSeqs(currentSeqs);
-
-    const fromBerthId = location.get(vessel.id);
-    if (fromBerthId !== undefined) {
-      const fromList = nextSeqs.get(fromBerthId);
-      if (fromList) {
-        const idx = fromList.indexOf(vessel.id);
-        if (idx >= 0) fromList.splice(idx, 1);
-      }
-    }
-
-    const targetBerth = candidates[Math.floor(rand() * candidates.length)];
-    const targetList = nextSeqs.get(targetBerth.id);
-    if (!targetList) continue;
-
-    const insertAt = Math.floor(rand() * (targetList.length + 1));
-    targetList.splice(insertAt, 0, vessel.id);
-
-    const nextPlan = buildPlan(nextSeqs, vesselMap);
-    const nextCost = objective(nextPlan);
+    const nextPlan = buildPlan(move.nextSeqs, s.vesselMap, s.sweep);
+    const nextCost = objective(nextPlan, vessels, berths, s.weights);
     const delta = nextCost - currentCost;
 
-    const accept =
-      delta <= 0 || rand() < Math.exp(-delta / Math.max(temperature, 1e-9));
+    const accept = delta <= 0 || rand() < Math.exp(-delta / Math.max(temperature, 1e-9));
 
     if (accept) {
-      currentSeqs = nextSeqs;
+      currentSeqs = move.nextSeqs;
       currentCost = nextCost;
-      location.set(vessel.id, targetBerth.id);
-
+      s.ctx.location.set(move.vesselId, move.targetBerthId);
       if (nextCost < bestCost) {
         bestCost = nextCost;
         bestPlan = nextPlan;
@@ -281,4 +403,259 @@ export function planOptimized(
   }
 
   return bestPlan;
+}
+
+/**
+ * Tabu-search berth planner.
+ *
+ * Same sequence representation and neighbourhood as simulated annealing
+ * (relocate one vessel), but with memory: a (vessel, target berth) move stays
+ * tabu for TABU_TENURE iterations. Each iteration samples several candidate
+ * moves and applies the best non-tabu one — even when it is worse than the
+ * current solution, which is how tabu escapes local minima. A tabu move is
+ * still allowed (aspiration) when it beats the best solution found so far.
+ * Deterministic for a fixed seed.
+ */
+export function planTabu(
+  vessels: Vessel[],
+  berths: Berth[],
+  opts: PlanOptions = {},
+): BerthPlan {
+  const seed = opts.seed ?? DEFAULT_SEED;
+  const timeLimitMs = opts.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
+
+  if (vessels.length === 0 || berths.length === 0) {
+    return buildPlan(new Map(), new Map(), sweepOpts(opts));
+  }
+
+  const s = setupSearch(vessels, berths, opts);
+  if (s.ctx.movable.length === 0) return s.bestPlan;
+
+  let currentSeqs = s.currentSeqs;
+  let currentCost = s.currentCost;
+  let bestPlan = s.bestPlan;
+  let bestCost = s.bestCost;
+
+  // (vesselId|berthId) -> iteration after which the move is allowed again.
+  const tabuUntil = new Map<string, number>();
+  const rand = mulberry32(seed + 7919);
+  const maxIterations = Math.max(64, Math.floor(timeLimitMs * ITERATIONS_PER_MS));
+
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
+    let bestMove: {
+      nextSeqs: Map<string, string[]>;
+      vesselId: string;
+      targetBerthId: string;
+      cost: number;
+    } | null = null;
+
+    for (let sample = 0; sample < TABU_CANDIDATES_PER_ITERATION; sample++) {
+      const move = randomMove(currentSeqs, s.ctx, rand);
+      if (!move) continue;
+      const candidatePlan = buildPlan(move.nextSeqs, s.vesselMap, s.sweep);
+      const candidateCost = objective(candidatePlan, vessels, berths, s.weights);
+      const key = `${move.vesselId}|${move.targetBerthId}`;
+      const isTabu = (tabuUntil.get(key) ?? -1) > iteration;
+      // Aspiration: a tabu move is allowed when it beats the global best.
+      if (isTabu && candidateCost >= bestCost) continue;
+      if (bestMove === null || candidateCost < bestMove.cost) {
+        bestMove = { ...move, cost: candidateCost };
+      }
+    }
+
+    if (bestMove === null) continue;
+
+    currentSeqs = bestMove.nextSeqs;
+    currentCost = bestMove.cost;
+    s.ctx.location.set(bestMove.vesselId, bestMove.targetBerthId);
+    tabuUntil.set(`${bestMove.vesselId}|${bestMove.targetBerthId}`, iteration + TABU_TENURE);
+
+    if (bestMove.cost < bestCost) {
+      bestCost = bestMove.cost;
+      bestPlan = buildPlan(currentSeqs, s.vesselMap, s.sweep);
+    }
+  }
+
+  return bestPlan;
+}
+
+/**
+ * Run greedy, simulated annealing, and tabu search on the same vessel set
+ * with the same weights, crane-schedule every plan against the shared pool,
+ * and pick the winner by weighted objective (ties resolved in
+ * greedy → annealing → tabu order, so the result is deterministic).
+ */
+export function compareAlgorithms(
+  vessels: Vessel[],
+  berths: Berth[],
+  opts: PlanOptions = {},
+): ComparisonResult {
+  const weights = opts.weights ?? { waiting: 1, fuel: 0, crane: 0 };
+  const tidesEnabled = opts.tidesEnabled ?? false;
+
+  const runners: Array<{ id: AlgorithmId; label: string; fn: (v: Vessel[], b: Berth[]) => BerthPlan }> = [
+    { id: "greedy", label: "Greedy (FCFS)", fn: (v, b) => planNaive(v, b, opts) },
+    { id: "annealing", label: "Simulated annealing", fn: (v, b) => planOptimized(v, b, opts) },
+    { id: "tabu", label: "Tabu search", fn: (v, b) => planTabu(v, b, opts) },
+  ];
+
+  const results: AlgorithmResult[] = runners.map((runner) => {
+    const rawPlan = runner.fn(vessels, berths);
+    const { plan, schedule } = scheduleCranes(rawPlan, vessels, berths, {
+      poolLimit: CRANE_POOL_LIMIT,
+      tidesEnabled,
+    });
+    return {
+      id: runner.id,
+      label: runner.label,
+      plan,
+      craneSchedule: schedule,
+      economics: planEconomics(plan, vessels, berths, weights),
+    };
+  });
+
+  let winner: AlgorithmId = "greedy";
+  let winnerCost = Number.POSITIVE_INFINITY;
+  for (const result of results) {
+    if (result.economics.objective < winnerCost - EPS) {
+      winnerCost = result.economics.objective;
+      winner = result.id;
+    }
+  }
+
+  return { results, winner };
+}
+
+/**
+ * Validate a drag-and-drop move: vessel `vesselId` to `targetBerthId`
+ * starting at `requestedStart` (hours). All checks run against the current
+ * plan; the moved vessel's own assignment is ignored.
+ */
+export function validateMove(
+  plan: BerthPlan,
+  vessels: Vessel[],
+  berths: Berth[],
+  vesselId: string,
+  targetBerthId: string,
+  requestedStart: number,
+  opts: { poolLimit?: number; tidesEnabled?: boolean; tideWindows?: TideWindow[] } = {},
+): DragValidation {
+  const vesselById = new Map(vessels.map((v) => [v.id, v]));
+  const berthById = new Map(berths.map((b) => [b.id, b]));
+  const vessel = vesselById.get(vesselId);
+  const berth = berthById.get(targetBerthId);
+  if (!vessel) return { valid: false, reason: "Unknown vessel." };
+  if (!berth) return { valid: false, reason: "Unknown berth." };
+
+  if (!berthFeasible(vessel, berth)) {
+    if (vessel.lengthM > berth.lengthM) {
+      return {
+        valid: false,
+        reason: `${vessel.name} (${vessel.lengthM}m) is too long for ${berth.name} (${berth.lengthM}m).`,
+      };
+    }
+    return {
+      valid: false,
+      reason: `${vessel.name} carries grain, but ${berth.name} is not grain-capable.`,
+    };
+  }
+
+  if (requestedStart < vessel.etaHours - EPS) {
+    return {
+      valid: false,
+      reason: `Cannot berth before ETA h+${vessel.etaHours.toFixed(1)}.`,
+    };
+  }
+
+  const tidesEnabled = opts.tidesEnabled ?? false;
+  if (tidesEnabled && needsTideWindow(vessel)) {
+    const windows = opts.tideWindows ?? generateTideWindows(tideHorizon(vessels));
+    if (!isInTideWindow(requestedStart, windows)) {
+      const next = nextTideWindowStart(requestedStart, windows);
+      return {
+        valid: false,
+        reason: `${vessel.name} draws ${vessel.draftM}m and may only enter during a tide window. Next window opens h+${next.toFixed(1)}.`,
+      };
+    }
+  }
+
+  const requestedEnd = requestedStart + vessel.handlingHours;
+  for (const a of plan.assignments) {
+    if (a.berthId !== targetBerthId || a.vesselId === vesselId) continue;
+    if (requestedStart < a.endHours - EPS && requestedEnd > a.startHours + EPS) {
+      const other = vesselById.get(a.vesselId);
+      return {
+        valid: false,
+        reason: `Overlaps ${other?.name ?? a.vesselId} on ${berth.name} (h+${a.startHours.toFixed(1)}–h+${a.endHours.toFixed(1)}).`,
+      };
+    }
+  }
+
+  const poolLimit = opts.poolLimit ?? CRANE_POOL_LIMIT;
+  const free = cranesFreeAt(plan.assignments, vessels, berths, vesselId, targetBerthId, requestedStart, poolLimit);
+  if (free < 0) {
+    const needed = cranesForVessel(vessel, berth);
+    return {
+      valid: false,
+      reason: `Crane pool over-allocated at that time: ${vessel.name} needs ${needed} crane(s), but only ${free + needed} of ${poolLimit} are free in that window. Try a later slot.`,
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Rebuild the plan after an accepted drag: move the vessel into the target
+ * berth's sequence at the drop position, re-sweep (tide-aware) and
+ * re-schedule cranes. Returns the new plan and its crane schedule.
+ */
+export function rebuildAfterMove(
+  plan: BerthPlan,
+  vessels: Vessel[],
+  berths: Berth[],
+  vesselId: string,
+  targetBerthId: string,
+  requestedStart: number,
+  opts: PlanOptions = {},
+): { plan: BerthPlan; craneSchedule: ReturnType<typeof scheduleCranes>["schedule"] } {
+  const seqs = new Map<string, string[]>();
+  for (const berth of berths) seqs.set(berth.id, []);
+
+  // Rebuild sequences from the current plan, minus the moved vessel.
+  const byBerth = new Map<string, Assignment[]>();
+  for (const a of plan.assignments) {
+    if (a.vesselId === vesselId) continue;
+    const list = byBerth.get(a.berthId);
+    if (list) list.push(a);
+    else byBerth.set(a.berthId, [a]);
+  }
+  for (const [berthId, list] of byBerth) {
+    list.sort((x, y) => x.startHours - y.startHours || compareIds(x.vesselId, y.vesselId));
+    seqs.set(berthId, list.map((a) => a.vesselId));
+  }
+
+  // Insert the moved vessel into the target berth at the drop position.
+  const target = seqs.get(targetBerthId) ?? [];
+  const targetAssignments = (byBerth.get(targetBerthId) ?? []).slice().sort((x, y) => x.startHours - y.startHours);
+  let insertAt = targetAssignments.length;
+  for (let i = 0; i < targetAssignments.length; i++) {
+    if (targetAssignments[i].startHours > requestedStart + EPS) {
+      insertAt = i;
+      break;
+    }
+  }
+  target.splice(insertAt, 0, vesselId);
+  seqs.set(targetBerthId, target);
+
+  const vesselMap = new Map(vessels.map((v) => [v.id, v]));
+  const rawPlan = buildPlan(seqs, vesselMap, {
+    ...sweepOpts(opts),
+    notBefore: new Map([[vesselId, requestedStart]]),
+  });
+  const { plan: timedPlan, schedule } = scheduleCranes(rawPlan, vessels, berths, {
+    poolLimit: CRANE_POOL_LIMIT,
+    tidesEnabled: opts.tidesEnabled ?? false,
+    notBefore: new Map([[vesselId, requestedStart]]),
+  });
+  return { plan: timedPlan, craneSchedule: schedule };
 }
