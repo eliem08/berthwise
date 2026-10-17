@@ -158,10 +158,57 @@ berthwise/
 │       ├── data.ts           # Demo dataset (stylized Casablanca)
 │       ├── types.ts          # Domain types
 │       ├── rng.ts            # Seeded PRNG (mulberry32)
+│       ├── contracts/        # Phase C: versioned zod wire contracts (1.0.0)
+│       ├── plan-service.ts   # Phase C: validated plan generation (Result-based)
+│       ├── idempotency.ts    # Phase C: DEMO-ONLY in-memory idempotency store
+│       ├── audit.ts          # Phase C: append-only audit log (dev-labeled)
+│       ├── auth.ts           # Phase C: Role/AuthProvider + DevMockAuthProvider
+│       ├── rate-limit.ts     # Phase C: in-memory token-bucket limiter
+│       ├── http.ts           # Phase C: body cap, error envelopes, no stack traces
 │       └── __tests__/        # vitest suites
+├── src/app/api/plans/      # Phase C: demo API (POST /api/plans, POST /api/plans/[id]/approve)
 ├── public/
 └── ...
 ```
+
+## Phase C — persistence, security, APIs
+
+Phase C hardens the planning core for service use under a "minimum
+necessary" doctrine: no database is wired (everything stays local and
+in-memory, clearly labeled DEMO-ONLY), no secrets exist in code.
+
+- **Versioned contracts** (`src/contracts/`, all `1.0.0`): `VesselSchedule`
+  (vessel call; `etdUtc` must be after `etaUtc`, UTC timestamps enforced),
+  `BerthPlan` (one record per vessel assignment; non-empty crane list),
+  `ResourceAvailability` (explicit `capacityUnit`; berth records must declare
+  `berthLengthM` **and** `maxDraftM` so the draft-vs-depth gate can run),
+  `OptimizationRecommendation` (deliberately mirrors the TAS shape — same
+  fields, no shared backend, no shared package; sync by convention),
+  `AuditEvent`.
+- **Validated generation** (`src/lib/plan-service.ts`): `generatePlan(raw)`
+  parses the request against the contracts, checks idempotency, runs
+  feasibility pre-gates (length / grain / draft-vs-depth per vessel), runs the
+  unchanged Phase B greedy + crane-pool planner, then post-validates the
+  emitted records (draft vs depth, window inside availability, crane capacity
+  over time). Failures return typed `Result` errors (`validation_failed` with
+  per-field issues, `infeasible` with reasons) — never silent coercion, never
+  an invalid schedule out.
+- **Idempotency**: repeated keys return the stored response deep-equal; the
+  same key with a different payload is rejected (`idempotency_key_reuse`).
+- **Audit trail**: append-only log of `plan.generated` / `plan.approved` /
+  `plan.superseded` with before/after plan ids, approver and reason.
+- **Auth/RBAC**: `Role = viewer|planner|approver|admin`; approving a plan
+  requires `approver`. `DevMockAuthProvider` is demo-only — the real-provider
+  contract (signature verification, server-side role mapping, never logging
+  tokens) is documented in `src/lib/auth.ts`.
+- **API hygiene**: demo routes cap bodies at 1 MiB, rate-limit per client
+  (token bucket, 20 req/min), and return structured `{ error, … }` envelopes
+  with no stack traces.
+- **Honest limitation**: the Phase B planner is depth-unaware, so a scenario
+  whose greedy output would put a deep vessel on a shallow berth is *refused*
+  rather than emitted — declare only depth-adequate berths.
+- **CI**: `npm audit --audit-level=high` gates the workflow (fails on high or
+  critical advisories); Dependabot runs weekly for npm.
 
 ## Getting started
 

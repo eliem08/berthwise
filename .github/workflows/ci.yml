@@ -10,6 +10,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - run: npm ci
+      # Dependency vulnerability gate (Phase C): fails the build when the
+      # npm registry reports any HIGH or CRITICAL severity advisory for this
+      # dependency tree. Threshold is deliberately --audit-level=high, not
+      # moderate/low, to keep the signal actionable; moderate/low findings
+      # are still visible in the step output for triage.
+      - run: npm audit --audit-level=high
       - run: npm run typecheck --if-present
       - run: npm run lint --if-present
       - run: npm test
