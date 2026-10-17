@@ -13,7 +13,7 @@ import { scheduleCranes } from "../cranes";
 import { CRANE_POOL_LIMIT } from "../economics";
 import { countRehandles, stackNaive, stackOptimized } from "../yard";
 import { simulateRelocations } from "../relocation";
-import { assertPlanFullyFeasible, randomInstance, EPS } from "./verify-helpers";
+import { assertPlanFullyFeasible, randomInstance } from "./verify-helpers";
 import type { Berth, BerthPlan, Box, CraneAssignment, Vessel } from "../types";
 
 /**
@@ -35,24 +35,24 @@ import type { Berth, BerthPlan, Box, CraneAssignment, Vessel } from "../types";
 
 interface PlannerCase {
   id: string;
-  run: (vessels: Vessel[], berths: Berth[], seed: number) => BerthPlan;
+  run: (vessels: Vessel[], berths: Berth[], seed: number, tides: boolean) => BerthPlan;
   seeded: boolean;
 }
 
 const PLANNERS: PlannerCase[] = [
-  { id: "greedy", run: (v, b) => planNaive(v, b, { tidesEnabled: false }), seeded: false },
+  { id: "greedy", run: (v, b, _s, t) => planNaive(v, b, { tidesEnabled: t }), seeded: false },
   {
     id: "annealing",
-    run: (v, b, s) => planOptimized(v, b, { seed: s, timeLimitMs: 30, tidesEnabled: false }),
+    run: (v, b, s, t) => planOptimized(v, b, { seed: s, timeLimitMs: 30, tidesEnabled: t }),
     seeded: true,
   },
   {
     id: "tabu",
-    run: (v, b, s) => planTabu(v, b, { seed: s, timeLimitMs: 30, tidesEnabled: false }),
+    run: (v, b, s, t) => planTabu(v, b, { seed: s, timeLimitMs: 30, tidesEnabled: t }),
     seeded: true,
   },
-  { id: "ga", run: (v, b, s) => planGA(v, b, { seed: s }), seeded: true },
-  { id: "alns", run: (v, b, s) => planALNS(v, b, { seed: s }), seeded: true },
+  { id: "ga", run: (v, b, s, t) => planGA(v, b, { seed: s, tidesEnabled: t }), seeded: true },
+  { id: "alns", run: (v, b, s, t) => planALNS(v, b, { seed: s, tidesEnabled: t }), seeded: true },
 ];
 
 const N_PROPERTY_INSTANCES = 25;
@@ -89,12 +89,12 @@ describe("phase D: plan-validity properties over random instances", () => {
       for (let i = 0; i < N_PROPERTY_INSTANCES; i++) {
         const { vessels, berths, tides } = propertyInstance(i);
         const before = JSON.stringify([vessels, berths]);
-        const plan = planner.run(vessels, berths, 1234);
+        const plan = planner.run(vessels, berths, 1234, tides);
         // Planners must never mutate their inputs.
         expect(JSON.stringify([vessels, berths]), `${planner.id} instance ${i}: inputs mutated`).toBe(
           before,
         );
-        assertPlanFullyFeasible(plan, vessels, berths, { tidesEnabled: false });
+        assertPlanFullyFeasible(plan, vessels, berths, { tidesEnabled: tides });
       }
     });
   }
@@ -114,11 +114,14 @@ describe("phase D: plan-validity properties over random instances", () => {
 
   it("crane pool is never exceeded: independent sweep over scheduleCranes output", () => {
     for (let i = 0; i < N_PROPERTY_INSTANCES; i++) {
-      const { vessels, berths } = propertyInstance(i);
+      const { vessels, berths, tides } = propertyInstance(i);
       const tightPool = Math.max(1, Math.floor(CRANE_POOL_LIMIT / 2));
       for (const planner of PLANNERS) {
-        const raw = planner.run(vessels, berths, 777);
-        const { plan, schedule } = scheduleCranes(raw, vessels, berths, { poolLimit: tightPool });
+        const raw = planner.run(vessels, berths, 777, tides);
+        const { plan, schedule } = scheduleCranes(raw, vessels, berths, {
+          poolLimit: tightPool,
+          tidesEnabled: tides,
+        });
         expect(schedule.poolLimit).toBe(tightPool);
         expect(sweepPeak(schedule.assignments), `${planner.id} instance ${i}`).toBe(
           schedule.peakUsage,
@@ -126,7 +129,7 @@ describe("phase D: plan-validity properties over random instances", () => {
         expect(schedule.peakUsage, `${planner.id} instance ${i}: pool exceeded`).toBeLessThanOrEqual(
           tightPool,
         );
-        assertPlanFullyFeasible(plan, vessels, berths, { tidesEnabled: false });
+        assertPlanFullyFeasible(plan, vessels, berths, { tidesEnabled: tides });
       }
     }
   });
@@ -138,8 +141,8 @@ describe("phase D: same-seed reproducibility", () => {
       const { vessels, berths } = propertyInstance(i);
       for (const planner of PLANNERS) {
         if (!planner.seeded) continue;
-        const a = planner.run(vessels, berths, 4242);
-        const b = planner.run(vessels, berths, 4242);
+        const a = planner.run(vessels, berths, 4242, false);
+        const b = planner.run(vessels, berths, 4242, false);
         expect(JSON.stringify(a), `${planner.id} instance ${i}: not reproducible`).toBe(
           JSON.stringify(b),
         );

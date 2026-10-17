@@ -18,14 +18,13 @@ import {
   generateTideWindows,
   isInTideWindow,
   needsTideWindow,
-  nextTideWindowStart,
 } from "../tide";
 import { countRehandles, stackNaive, stackOptimized } from "../yard";
 import { simulateRelocations, stackByExpectedRelocations } from "../relocation";
 import { computeKpis } from "../kpi";
 import { robustnessTradeoff, stressTestPlan, UNCERTAINTY_HALF_WIDTH_HOURS } from "../robust";
 import { predictAll } from "../eta";
-import type { Berth, BerthPlan, Box, ObjectiveWeights, Vessel } from "../types";
+import type { Berth, BerthPlan, ObjectiveWeights, Vessel } from "../types";
 import {
   assertPlanFullyFeasible,
   bruteForceOptimum,

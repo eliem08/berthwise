@@ -9,8 +9,6 @@ import { planEconomics } from "../economics";
 import { BERTHS, VESSELS } from "../data";
 import type { AlgorithmResult, Vessel } from "../types";
 
-const EPS = 1e-9;
-
 describe("comparison fairness (phase D)", () => {
   const OPTS = { seed: 42, timeLimitMs: 150, weights: { waiting: 1, fuel: 0, crane: 0 } };
 
@@ -78,7 +76,11 @@ describe("comparison fairness (phase D)", () => {
   it("rejects empty or fingerprint-less result sets", () => {
     expect(() => assertFairComparison([])).toThrow(/no results/);
     const { results } = compareAlgorithms(VESSELS, BERTHS, OPTS);
-    const stripped = results.map(({ inputFingerprint: _drop, ...r }) => r);
+    const stripped = results.map((r) => {
+      const copy = { ...r };
+      delete copy.inputFingerprint;
+      return copy;
+    });
     expect(() => assertFairComparison(stripped as AlgorithmResult[])).toThrow(/missing inputFingerprint/);
   });
 });
