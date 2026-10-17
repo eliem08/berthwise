@@ -2,6 +2,7 @@ import type { Berth, BerthPlan, PlanOptions, RobustPoint, RobustResult, Vessel }
 import { mulberry32 } from "./rng";
 import { planOptimized, planToSequences, sequencesToPlan } from "./berth";
 import { planEconomics } from "./economics";
+import { assertPlanningInputs } from "./validate";
 
 /**
  * Robust berth planning under ETA uncertainty (Bertsimas & Sim 2004,
@@ -78,6 +79,13 @@ export function stressTestPlan(
   halfWidth: number,
 ): { feasibilityRate: number; meanSlipHours: number; worstSlipHours: number } {
   void berths; // sequences + sweep are berth-agnostic once the plan exists
+  assertPlanningInputs(vessels, berths);
+  if (!Number.isInteger(samples) || samples < 0) {
+    throw new Error(`invalid input: samples must be a non-negative integer (received ${String(samples)})`);
+  }
+  if (typeof graceHours !== "number" || !Number.isFinite(graceHours) || graceHours < 0) {
+    throw new Error(`invalid input: graceHours must be a finite number >= 0 (received ${String(graceHours)})`);
+  }
   const seqs = planToSequences(plan);
   const plannedStarts = new Map(plan.assignments.map((a) => [a.vesselId, a.startHours]));
   const rand = mulberry32(seed);
@@ -136,6 +144,7 @@ export function robustnessTradeoff(
   seed: number = 7,
   graceHours: number = DEFAULT_GRACE_HOURS,
 ): RobustResult {
+  assertPlanningInputs(vessels, berths);
   // Baseline: nominal plan (buffer 0, same solver as the robust plans)
   // priced on nominal ETAs.
   const nominalPlan = robustPlan(vessels, berths, opts, 0);

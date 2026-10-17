@@ -167,10 +167,23 @@ berthwise/
 
 ```bash
 npm install
-npm run dev      # http://localhost:3000 — landing at /, demo at /demo
-npm test         # vitest: 73 tests
-npm run build    # production build
+npm run dev        # http://localhost:3000 — landing at /, demo at /demo
+npm test           # vitest: 101 tests (incl. the Phase B audit suite)
+npm run typecheck  # tsc --noEmit
+npm run lint       # eslint (flat config, next/core-web-vitals + next/typescript)
+npm run build      # production build
 ```
+
+CI (`.github/workflows/ci.yml`) runs `npm ci`, typecheck, lint, tests, and
+build on pushes to `harden/**` / `main` and on pull requests.
+
+Input validation: every public planner, the crane scheduler, and the yard
+stacking functions validate their inputs up front (`src/lib/validate.ts`) —
+non-finite numbers, non-positive handling times or lengths, duplicate ids,
+and non-permutation retrieval ranks throw a clear `invalid input` error
+instead of producing a silently invalid plan. Beam and per-berth depth
+limits are not modelled (the `Vessel` type carries LOA and draft only;
+draft ≥ 12 m is enforced via tide windows).
 
 Deploy: push to `main` — the Vercel project builds automatically (`next build`).
 
@@ -212,7 +225,7 @@ Feasibility (length fit, grain capability, no overlaps, tide windows) holds by c
 
 **Economics** (`src/lib/economics.ts`). Fuel proxy: 0.9 t/h at anchor for container vessels, 0.6 t/h for grain. Crane cost: $180 per crane-hour. These are transparent planning proxies, not measured port figures — they exist so the objective can trade waiting against fuel and crane spend.
 
-**Yard stacking** (`src/lib/yard.ts`). Containers are placed latest-retrieval-first onto the stack whose top box has the closest later retrieval rank ("deepest departure at the bottom"). Rehandles are counted by simulating retrievals in rank order. This classic heuristic is optimal for the static stacking problem under mild conditions and decisively beats arrival-order stacking.
+**Yard stacking** (`src/lib/yard.ts`). Containers are placed latest-retrieval-first onto the stack whose top box has the closest later retrieval rank ("deepest departure at the bottom"). Rehandles are counted by simulating retrievals in rank order. This classic heuristic is a strong performer on the static stacking problem and decisively beats arrival-order stacking — but it is a heuristic, not a proven optimum; the relocation simulation grades all three stacking methods empirically.
 
 **Relocation** (`src/lib/relocation.ts`). The legacy blocking count *deletes* blocking boxes when they are lifted aside, so a box can never block twice. The relocation simulation (blocks relocation problem; Caserta, Schwarze & Voß 2012) moves blocking boxes to other stacks — min boxes departing before it, then min height, then lowest index — and counts every move, including re-relocations. A third stacking method, expected-relocation stacking, places each arriving box where it minimises the number of boxes already there that depart before it (each such box will force one relocation of the new arrival when it leaves; cf. Kim 1997). Relocations need a free slot, so the simulation runs with one buffer stack, and charges 3 minutes of crane time per move as the yard's contribution to truck turnaround.
 

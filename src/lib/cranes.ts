@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import { cranesForVessel, CRANE_POOL_LIMIT } from "./economics";
 import { needsTideWindow, nextTideWindowStart, generateTideWindows } from "./tide";
+import { assertPlanningInputs } from "./validate";
 
 /**
  * Crane scheduling against a shared quay-crane pool.
@@ -96,6 +97,10 @@ export function scheduleCranes(
   opts: ScheduleCranesOptions = {},
 ): { plan: BerthPlan; schedule: CraneSchedule } {
   const poolLimit = opts.poolLimit ?? CRANE_POOL_LIMIT;
+  assertPlanningInputs(vessels, berths);
+  if (!Number.isFinite(poolLimit) || poolLimit < 0) {
+    throw new Error(`invalid input: poolLimit must be a finite number >= 0 (received ${String(poolLimit)})`);
+  }
   const tidesEnabled = opts.tidesEnabled ?? false;
 
   const vesselById = new Map(vessels.map((v) => [v.id, v]));
@@ -124,7 +129,10 @@ export function scheduleCranes(
   const intervals: CraneInterval[] = [];
   const newAssignments: Assignment[] = [];
   const craneAssignments: CraneAssignment[] = [];
+  // Every berth gets an entry (0 when idle) so downstream means over
+  // berthBusyHours are taken over ALL berths, not just the busy ones.
   const berthBusyHours: Record<string, number> = {};
+  for (const berth of berths) berthBusyHours[berth.id] = 0;
   let totalWaitingHours = 0;
   let makespanHours = 0;
   let totalCraneHours = 0;
@@ -247,6 +255,7 @@ export function cranesFreeAt(
   startHours: number,
   poolLimit: number = CRANE_POOL_LIMIT,
 ): number {
+  assertPlanningInputs(vessels, berths);
   const vesselById = new Map(vessels.map((v) => [v.id, v]));
   const berthById = new Map(berths.map((b) => [b.id, b]));
   const vessel = vesselById.get(vesselId);

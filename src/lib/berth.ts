@@ -12,6 +12,7 @@ import type {
   Vessel,
 } from "./types";
 import { mulberry32 } from "./rng";
+import { assertPlanningInputs } from "./validate";
 import { generateTideWindows, isInTideWindow, needsTideWindow, nextTideWindowStart } from "./tide";
 import { planEconomics, cranesForVessel, CRANE_POOL_LIMIT } from "./economics";
 import { cranesFreeAt, scheduleCranes } from "./cranes";
@@ -181,6 +182,7 @@ export function sequencesToPlan(
   vessels: Vessel[],
   opts: SequenceSweepOptions = {},
 ): BerthPlan {
+  assertPlanningInputs(vessels, []);
   const vesselMap = new Map<string, Vessel>();
   for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
   return buildPlan(seqs, vesselMap, opts);
@@ -283,6 +285,7 @@ function sweepOpts(opts: PlanOptions): SweepOptions {
  * earliest. This is the "greedy" algorithm in the comparison view.
  */
 export function planNaive(vessels: Vessel[], berths: Berth[], opts: PlanOptions = {}): BerthPlan {
+  assertPlanningInputs(vessels, berths);
   const vesselMap = new Map<string, Vessel>();
   for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
 
@@ -408,6 +411,7 @@ export function planOptimized(
   const seed = opts.seed ?? DEFAULT_SEED;
   const timeLimitMs = opts.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
 
+  assertPlanningInputs(vessels, berths);
   if (vessels.length === 0 || berths.length === 0) {
     return buildPlan(new Map(), new Map(), sweepOpts(opts));
   }
@@ -483,6 +487,7 @@ export function planTabu(
   // (vesselId|berthId) -> iteration after which the move is allowed again.
   const tabuUntil = new Map<string, number>();
   const rand = mulberry32(seed + 7919);
+  assertPlanningInputs(vessels, berths);
   const maxIterations = Math.max(64, Math.floor(timeLimitMs * ITERATIONS_PER_MS));
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -533,6 +538,7 @@ export function compareAlgorithms(
   berths: Berth[],
   opts: PlanOptions = {},
 ): ComparisonResult {
+  assertPlanningInputs(vessels, berths);
   const weights = opts.weights ?? { waiting: 1, fuel: 0, crane: 0 };
   const tidesEnabled = opts.tidesEnabled ?? false;
 
@@ -585,6 +591,7 @@ export function validateMove(
   requestedStart: number,
   opts: { poolLimit?: number; tidesEnabled?: boolean; tideWindows?: TideWindow[] } = {},
 ): DragValidation {
+  assertPlanningInputs(vessels, berths);
   const vesselById = new Map(vessels.map((v) => [v.id, v]));
   const berthById = new Map(berths.map((b) => [b.id, b]));
   const vessel = vesselById.get(vesselId);
@@ -663,6 +670,7 @@ export function rebuildAfterMove(
   requestedStart: number,
   opts: PlanOptions = {},
 ): { plan: BerthPlan; craneSchedule: ReturnType<typeof scheduleCranes>["schedule"] } {
+  assertPlanningInputs(vessels, berths);
   const seqs = new Map<string, string[]>();
   for (const berth of berths) seqs.set(berth.id, []);
 

@@ -109,7 +109,7 @@ export default function CompareCharts({ deltas }: { deltas: KpiDelta[] }) {
                   labelStyle={{ color: "#e2e8f0", fontWeight: 600 }}
                   itemStyle={{ color: "#cbd5e1" }}
                   cursor={{ fill: "#122540" }}
-                  formatter={(value: number | string) => formatNumber(Number(value))}
+                  formatter={(value) => formatNumber(Number(value ?? 0))}
                 />
                 <Legend
                   wrapperStyle={{ color: "#94a3b8", fontSize: 12, paddingTop: 8 }}

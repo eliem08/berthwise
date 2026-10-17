@@ -4,7 +4,7 @@
     "next": "15.5.27",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "recharts": "2.15.3"
+    "recharts": "^3.10.1"
   },
   "description": "AI berth allocation and yard optimization for the Port of Casablanca",
   "devDependencies": {

@@ -1,4 +1,5 @@
 import type { Box, YardSolution } from "./types";
+import { assertRankPermutation } from "./validate";
 
 /* -------------------------------------------------------------------------- */
 /* Validation                                                                  */
@@ -35,6 +36,7 @@ function overflowError(box: Box, stackCount: number, maxHeight: number): Error {
  * Pure: the input yard is deep-copied, never mutated.
  */
 export function countRehandles(stacks: Box[][]): number {
+  assertRankPermutation(stacks.flat());
   // Deep copy — the simulation mutates the yard, the caller's data must not change.
   const yard: Box[][] = stacks.map((stack) => stack.map((box) => ({ ...box })));
 
@@ -101,6 +103,7 @@ export function stackNaive(
   maxHeight: number,
 ): YardSolution {
   assertYardDimensions(stackCount, maxHeight);
+  assertRankPermutation(boxes);
 
   const stacks: Box[][] = Array.from({ length: stackCount }, () => []);
 
@@ -149,6 +152,7 @@ export function stackOptimized(
   maxHeight: number,
 ): YardSolution {
   assertYardDimensions(stackCount, maxHeight);
+  assertRankPermutation(boxes);
 
   const stacks: Box[][] = Array.from({ length: stackCount }, () => []);
 

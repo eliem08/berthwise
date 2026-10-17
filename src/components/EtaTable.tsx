@@ -40,8 +40,8 @@ export default function EtaTable({ predictions, vessels }: EtaTableProps) {
             Vessel ETA predictions
           </h2>
           <p className="mt-0.5 text-xs text-slate-400 sm:text-sm">
-            Constant-velocity sailing model + port-congestion delay. Predicted ETAs feed the berth
-            planner.
+            Congestion-delay model: predicted = scheduled + max(0, congestion × 16h +
+            deterministic per-vessel jitter). Predicted ETAs feed the berth planner.
           </p>
         </div>
       </div>

@@ -9,6 +9,7 @@ import {
   normalizeWeights,
   planEconomics,
 } from "./economics";
+import { assertPlanningInputs } from "./validate";
 
 /**
  * Exact solver for the discrete dynamic BAP: branch-and-bound over
@@ -213,6 +214,7 @@ export function solveExact(
   nodeCap: number = DEFAULT_NODE_CAP,
   prune: boolean = true,
 ): ExactResult {
+  assertPlanningInputs(vessels, berths);
   const searchable = vessels.filter((v) =>
     berths.some(
       (b) => v.lengthM <= b.lengthM && !(v.cargo === "grain" && !b.grainCapable),
