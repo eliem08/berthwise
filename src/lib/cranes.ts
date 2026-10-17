@@ -99,7 +99,6 @@ export function scheduleCranes(
   const tidesEnabled = opts.tidesEnabled ?? false;
 
   const vesselById = new Map(vessels.map((v) => [v.id, v]));
-  const berthById = new Map(berths.map((b) => [b.id, b]));
 
   // Reconstruct per-berth sequences from the plan (sorted by start time).
   const queues = new Map<string, string[]>();

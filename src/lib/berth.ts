@@ -477,7 +477,6 @@ export function planTabu(
   if (s.ctx.movable.length === 0) return s.bestPlan;
 
   let currentSeqs = s.currentSeqs;
-  let currentCost = s.currentCost;
   let bestPlan = s.bestPlan;
   let bestCost = s.bestCost;
 
@@ -511,7 +510,6 @@ export function planTabu(
     if (bestMove === null) continue;
 
     currentSeqs = bestMove.nextSeqs;
-    currentCost = bestMove.cost;
     s.ctx.location.set(bestMove.vesselId, bestMove.targetBerthId);
     tabuUntil.set(`${bestMove.vesselId}|${bestMove.targetBerthId}`, iteration + TABU_TENURE);
 
