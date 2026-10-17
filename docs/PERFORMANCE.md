@@ -12,8 +12,8 @@ differ (see `docs/ACCEPTANCE.md`).
 
 | case | vessels | berths | median wall | notes |
 | --- | --- | --- | --- | --- |
-| exact 8v/2b tides-off | 8 | 2 | 6 ms | nodes explored (median): 1,349; proven optimal on all 3 seeds |
-| exact 8v/3b tides-on | 8 | 3 | 34 ms | nodes explored (median): 8,686; proven optimal on all 2 seeds |
+| exact 8v/2b tides-off | 8 | 2 | 8 ms | nodes explored (median): 1,349; proven optimal on all 3 seeds |
+| exact 8v/3b tides-on | 8 | 3 | 31 ms | nodes explored (median): 8,686; proven optimal on all 2 seeds |
 | exact 6v/2b tides-on | 6 | 2 | 1 ms | nodes explored (median): 301; proven optimal on all 2 seeds |
 
 The exact solver is exponential: the node counts above are the honest cost
@@ -27,19 +27,19 @@ production planner. The 8-vessel ceiling is enforced by the solver
 | case | vessels | berths | median wall | notes |
 | --- | --- | --- | --- | --- |
 | greedy 20v/5b | 20 | 5 | 0 ms | ≈ 0.0 ms/vessel |
-| annealing 20v/5b | 20 | 5 | 813 ms | ≈ 40.7 ms/vessel |
-| tabu 20v/5b | 20 | 5 | 6003 ms | ≈ 300.2 ms/vessel |
+| annealing 20v/5b | 20 | 5 | 782 ms | ≈ 39.1 ms/vessel |
+| tabu 20v/5b | 20 | 5 | 5590 ms | ≈ 279.5 ms/vessel |
 | ga 20v/5b | 20 | 5 | 48 ms | ≈ 2.4 ms/vessel |
-| alns 20v/5b | 20 | 5 | 1243 ms | ≈ 62.2 ms/vessel |
+| alns 20v/5b | 20 | 5 | 1172 ms | ≈ 58.6 ms/vessel |
 | greedy 50v/8b | 50 | 8 | 0 ms | ≈ 0.0 ms/vessel |
-| annealing 50v/8b | 50 | 8 | 1570 ms | ≈ 31.4 ms/vessel |
-| tabu 50v/8b | 50 | 8 | 11420 ms | ≈ 228.4 ms/vessel |
+| annealing 50v/8b | 50 | 8 | 1438 ms | ≈ 28.8 ms/vessel |
+| tabu 50v/8b | 50 | 8 | 11509 ms | ≈ 230.2 ms/vessel |
 | ga 50v/8b | 50 | 8 | 68 ms | ≈ 1.4 ms/vessel |
-| alns 50v/8b | 50 | 8 | 36101 ms | ≈ 722.0 ms/vessel |
+| alns 50v/8b | 50 | 8 | 36076 ms | ≈ 721.5 ms/vessel |
 | greedy 100v/10b | 100 | 10 | 0 ms | ≈ 0.0 ms/vessel |
-| annealing 100v/10b | 100 | 10 | 2734 ms | ≈ 27.3 ms/vessel |
-| tabu 100v/10b | 100 | 10 | 22083 ms | ≈ 220.8 ms/vessel |
-| ga 100v/10b | 100 | 10 | 133 ms | ≈ 1.3 ms/vessel |
+| annealing 100v/10b | 100 | 10 | 2964 ms | ≈ 29.6 ms/vessel |
+| tabu 100v/10b | 100 | 10 | 22211 ms | ≈ 222.1 ms/vessel |
+| ga 100v/10b | 100 | 10 | 141 ms | ≈ 1.4 ms/vessel |
 
 Annealing/tabu take an iteration budget derived from `timeLimitMs`
 (200 iterations/ms, i.e. 100k iterations at the 500 ms setting used here),
@@ -49,11 +49,11 @@ excluded from the routine suite: see below.
 
 ### Scaling assessment
 
-- **annealing**: 40.7 @20 → 31.4 @50 → 27.3 @100 ms/vessel — roughly linear or better in this range
-- **tabu**: 300.2 @20 → 228.4 @50 → 220.8 @100 ms/vessel — roughly linear or better in this range
-- **ga**: 2.4 @20 → 1.4 @50 → 1.3 @100 ms/vessel — roughly linear or better in this range
+- **annealing**: 39.1 @20 → 28.8 @50 → 29.6 @100 ms/vessel — roughly linear or better in this range
+- **tabu**: 279.5 @20 → 230.2 @50 → 222.1 @100 ms/vessel — roughly linear or better in this range
+- **ga**: 2.4 @20 → 1.4 @50 → 1.4 @100 ms/vessel — roughly linear or better in this range
 - **greedy**: 0.0 @20 → 0.0 @50 → 0.0 @100 ms/vessel — roughly linear or better in this range
-- **alns**: 62.2 @20 → 722.0 @50 ms/vessel — **SUPERLINEAR** — per-vessel cost grows faster than instance size
+- **alns**: 58.6 @20 → 721.5 @50 ms/vessel — **SUPERLINEAR** — per-vessel cost grows faster than instance size
 
 **ALNS is superlinear and is the scaling risk in this codebase.**
 Measured separately (single run, same machine, same instance family):

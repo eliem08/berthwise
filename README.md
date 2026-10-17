@@ -278,6 +278,62 @@ Feasibility (length fit, grain capability, no overlaps, tide windows) holds by c
 
 **ETA prediction** (`src/lib/eta.ts`). `predicted = scheduled + max(0, congestion × 16h + jitter)`. Deliberately simple and explainable: the vessel is already en route, so what moves the ETA is port congestion, not sailing physics. Swap in a real AIS feed by replacing one function.
 
+## Validation (Phase D — realistic validation)
+
+Phase D separates *software correctness* (the code honours its own
+constraints) from *real-world accuracy* (the plans match a real terminal).
+All 182 tests pass; the suite below is what backs each claim.
+
+**Exact-solver verification.** The branch-and-bound solver is cross-checked
+against an *independent* exhaustive enumerator (own sweep, own objective —
+only the tide helpers and `berthFeasible` are shared) on every vessel count
+from 2 up to the 8-vessel ceiling, across tight/loose berth counts,
+tide-on/tide-off, draft-heavy and grain-heavy mixes: every instance
+`provenOptimal`, every objective equal to brute force
+(`phased-wider-verification.test.ts`, 13 tests). Any mismatch would be a
+defect; none was found.
+
+**Property-based tests** (`phased-properties.test.ts`, 14 tests, seeded
+`mulberry32` PRNG). Invariants over 25 random instances per planner: no
+berth overlap, dimensions fit, ETA/draft/tide windows respected, totals
+consistent; crane pool never exceeded (re-verified with an independent
+sweep-line); yard relocation moves replayed box-by-box (moved box on top,
+destination has room, served boxes retrievable, yard ends empty).
+Same-seed runs are bit-identical.
+
+**Comparison fairness.** `compareAlgorithms` now enforces fairness instead
+of assuming it: every result carries an `inputFingerprint` of the exact
+instance, weights, tide flag and budget it was graded on; each runner is
+checked before/after for mutations of the shared inputs; and
+`assertFairComparison` throws if results from mismatched
+instances/objectives/budgets are ever mixed
+(`phased-fairness.test.ts`, 7 tests).
+
+**Performance** (`docs/PERFORMANCE.md`, measured 2026-10-17 on 2× AMD EPYC,
+wall-clock in vitest). Exact solver at the 8-vessel ceiling: 6–34 ms,
+thousands of nodes explored, proven optimal. Heuristics at 20/50/100
+vessels: greedy ~1 ms, GA ~0.1 s, annealing ~0.8/1.6/2.7 s, tabu
+~6/11/22 s — all roughly linear. **ALNS is the documented exception:**
+~2 s at 20 vessels, ~36 s at 50, **~535 s (8.9 min) at 100** — a 273×
+slowdown for a 5× size increase. It is excluded from interactive paths at
+100+ vessels until fixed (see `docs/LIMITATIONS.md` L3).
+
+**Real-world data contract** (`src/datasets/`, `docs/DATASETS.md`).
+Versioned zod schemas (`SCHEMA_VERSION = "1.0.0"`) for vessel ETAs, berth
+geometry, crane availability, tide restrictions, and yard snapshots, with
+explicit units (metres, ISO-8601 UTC), required vs optional fields, and an
+exported validator. `toPlannerInputs` converts a dataset to planner input
+and returns every non-data assumption in plain language.
+
+**The honest boundary: no real data exists.** Nothing in
+`fixtures/synthetic/` came from a terminal operator, a port authority, or
+a shipping agent — the fixtures prove the software reads the format and
+plans feasibly from it (software correctness only). What a supervised
+pilot would need, from whom, and the per-criterion MET / NOT MET /
+BLOCKED-ON-REAL-DATA status are in `docs/ACCEPTANCE.md`; the frank list of
+what is unproven (depth-unaware planner, 8-vessel ceiling, ALNS scaling,
+stylised tides, shared crane pool, …) is in `docs/LIMITATIONS.md`.
+
 ## Limitations (honest)
 
 - **Stylized data.** Vessel schedules, berths, drafts, and the yard are a realistic-but-fictional Casablanca scenario, not ANP operational data. Drafts and tide windows are illustrative.
