@@ -206,13 +206,13 @@ ${assess("greedy", [[20, 5], [50, 8], [100, 10]])}
 ${assess("alns", [[20, 5], [50, 8]])}
 
 **ALNS is superlinear and is the scaling risk in this codebase.**
-Measured separately (single run, same machine): 100 vessels / 10 berths
-took several minutes (vs ~2 s at 20 vessels and ~29 s at 50 vessels on the
-same shapes) — per-vessel cost grows ~15× from 20→50 vessels for a 2.5×
-size increase. ALNS's 400 fixed destroy/repair iterations each re-sweep
-the plan, so its cost grows faster than n² in practice. Do not run the
-current ALNS at 100+ vessels in any interactive path; it is fine at
-≤ 50 vessels. Fixing this (fewer iterations at scale, incremental
+Measured separately (single run, same machine, same instance family):
+~2.0 s at 20 vessels, ~28.9 s at 50 vessels, **~535 s (8.9 min) at 100
+vessels** — per-vessel cost grows 98 → 578 → 5,345 ms/vessel, i.e. a 273×
+slowdown for a 5× size increase. ALNS's 400 fixed destroy/repair iterations
+each re-sweep the plan, so its cost grows much faster than n² in practice.
+Do not run the current ALNS at 100+ vessels in any interactive path; it is
+fine at ≤ 50 vessels. Fixing this (fewer iterations at scale, incremental
 evaluation, or a time-boxed variant) is recorded in
 \`docs/LIMITATIONS.md\`.
 
@@ -225,7 +225,8 @@ evaluation, or a time-boxed variant) is recorded in
   scale — quality above the 8-vessel ceiling has no exact reference to be
   graded against (see \`docs/LIMITATIONS.md\`).
 `;
-    writeFileSync(new URL("../../docs/PERFORMANCE.md", import.meta.url), doc);
+    // Vitest runs with the project root as cwd; write relative to it.
+    writeFileSync("docs/PERFORMANCE.md", doc);
     expect(doc).toContain("exact 8v/2b");
     expect(doc).toContain("ga 100v/10b");
   });
