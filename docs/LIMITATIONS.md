@@ -100,3 +100,21 @@ measured ETA forecast-error distributions.
 
 **Resolving evidence:** real ETA error data from an agent feed → calibrate
 the band → re-run the robustness tradeoff analysis.
+
+
+## Security, dependencies and production readiness (verified 2026-10-28)
+
+**Dependency audit.** `npm audit` reports 0 vulnerabilities (all severities) on the lockfile at the commit that introduced this section. CI runs `npm audit --audit-level=high` as a **blocking** step with **no exceptions**; a second step prints the full report. If an unfixable advisory ever has to be tolerated, it must be listed here with advisory ID, affected environment, mitigation, expiry and follow-up, and gated by ID in CI, not by turning the audit into a warning.
+
+**Not production-ready.** A green CI run is not evidence of production readiness. Missing before any real deployment: real-data validation, a durable shared store, a real identity provider with verified credentials, operational monitoring, backup/recovery, and an authorized staging validation. Nothing in this repository has been connected to a real port, TOS, gate controller or production service.
+
+**Feature status.**
+
+| Feature | Status |
+|---|---|
+| Plan validation, idempotency, audit, RBAC checks, rate limiting | Implemented and tested, **process-local, in-memory only** |
+| Authentication | **Demo only.** `src/lib/demo-auth.ts` ships static, publicly documented tokens (e.g. the admin token). Since this review the demo provider **fails closed in production** (401) unless `ENABLE_DEMO_AUTH=true`. A real `AuthProvider` is still a placeholder. |
+| Durable persistence | Not implemented |
+| Heuristic vs optimal | Only the exact solver (up to 8 vessels, see L2) proves optimality; ALNS/tabu/etc. results are heuristic and must not be reported as optimal. |
+
+**Test-suite note.** The performance tests rewrite `docs/PERFORMANCE.md` when run; do not commit that churn unless the numbers are intentionally refreshed.

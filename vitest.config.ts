@@ -1,6 +1,11 @@
 import { defineConfig } from "vitest/config";
+import path from "path";
 
 export default defineConfig({
+  resolve: {
+    // Mirrors tsconfig.json "@/*" so route handlers can be imported in tests.
+    alias: { "@": path.resolve(__dirname, "src") },
+  },
   test: {
     environment: "node",
     include: ["src/lib/__tests__/**/*.test.ts"],

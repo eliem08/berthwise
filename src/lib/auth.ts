@@ -61,6 +61,15 @@ export interface AuthProvider {
  * DEMO ONLY — no cryptography, static user table, plain-text demo tokens.
  * Do not deploy. See the real-provider contract above.
  */
+/**
+ * Demo auth is allowed outside production, or in production only with the
+ * explicit opt-in ENABLE_DEMO_AUTH=true (e.g. a public demo deployment).
+ * Evaluated per call so tests can toggle it.
+ */
+export function demoAuthEnabled(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.ENABLE_DEMO_AUTH === "true";
+}
+
 export class DevMockAuthProvider implements AuthProvider {
   private users = new Map<string, User>();
 
@@ -70,6 +79,10 @@ export class DevMockAuthProvider implements AuthProvider {
   }
 
   async authenticate(token: string): Promise<PlanResult<User>> {
+    // Fail closed: the published demo tokens must not work in production.
+    if (!demoAuthEnabled()) {
+      return err({ code: "unauthorized", message: "demo authentication is disabled in production; no auth provider configured" });
+    }
     const user = this.users.get(token);
     if (!user || token.length === 0) {
       return err({ code: "unauthorized", message: "unknown or missing credentials" });
