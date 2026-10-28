@@ -158,19 +158,79 @@ berthwise/
 │       ├── data.ts           # Demo dataset (stylized Casablanca)
 │       ├── types.ts          # Domain types
 │       ├── rng.ts            # Seeded PRNG (mulberry32)
+│       ├── contracts/        # Phase C: versioned zod wire contracts (1.0.0)
+│       ├── plan-service.ts   # Phase C: validated plan generation (Result-based)
+│       ├── idempotency.ts    # Phase C: DEMO-ONLY in-memory idempotency store
+│       ├── audit.ts          # Phase C: append-only audit log (dev-labeled)
+│       ├── auth.ts           # Phase C: Role/AuthProvider + DevMockAuthProvider
+│       ├── rate-limit.ts     # Phase C: in-memory token-bucket limiter
+│       ├── http.ts           # Phase C: body cap, error envelopes, no stack traces
 │       └── __tests__/        # vitest suites
+├── src/app/api/plans/      # Phase C: demo API (POST /api/plans, POST /api/plans/[id]/approve)
 ├── public/
 └── ...
 ```
+
+## Phase C — persistence, security, APIs
+
+Phase C hardens the planning core for service use under a "minimum
+necessary" doctrine: no database is wired (everything stays local and
+in-memory, clearly labeled DEMO-ONLY), no secrets exist in code.
+
+- **Versioned contracts** (`src/contracts/`, all `1.0.0`): `VesselSchedule`
+  (vessel call; `etdUtc` must be after `etaUtc`, UTC timestamps enforced),
+  `BerthPlan` (one record per vessel assignment; non-empty crane list),
+  `ResourceAvailability` (explicit `capacityUnit`; berth records must declare
+  `berthLengthM` **and** `maxDraftM` so the draft-vs-depth gate can run),
+  `OptimizationRecommendation` (deliberately mirrors the TAS shape — same
+  fields, no shared backend, no shared package; sync by convention),
+  `AuditEvent`.
+- **Validated generation** (`src/lib/plan-service.ts`): `generatePlan(raw)`
+  parses the request against the contracts, checks idempotency, runs
+  feasibility pre-gates (length / grain / draft-vs-depth per vessel), runs the
+  unchanged Phase B greedy + crane-pool planner, then post-validates the
+  emitted records (draft vs depth, window inside availability, crane capacity
+  over time). Failures return typed `Result` errors (`validation_failed` with
+  per-field issues, `infeasible` with reasons) — never silent coercion, never
+  an invalid schedule out.
+- **Idempotency**: repeated keys return the stored response deep-equal; the
+  same key with a different payload is rejected (`idempotency_key_reuse`).
+- **Audit trail**: append-only log of `plan.generated` / `plan.approved` /
+  `plan.superseded` with before/after plan ids, approver and reason.
+- **Auth/RBAC**: `Role = viewer|planner|approver|admin`; approving a plan
+  requires `approver`. `DevMockAuthProvider` is demo-only — the real-provider
+  contract (signature verification, server-side role mapping, never logging
+  tokens) is documented in `src/lib/auth.ts`.
+- **API hygiene**: demo routes cap bodies at 1 MiB, rate-limit per client
+  (token bucket, 20 req/min), and return structured `{ error, … }` envelopes
+  with no stack traces.
+- **Honest limitation**: the Phase B planner is depth-unaware, so a scenario
+  whose greedy output would put a deep vessel on a shallow berth is *refused*
+  rather than emitted — declare only depth-adequate berths.
+- **CI**: `npm audit --audit-level=high` gates the workflow (fails on high or
+  critical advisories); Dependabot runs weekly for npm.
 
 ## Getting started
 
 ```bash
 npm install
-npm run dev      # http://localhost:3000 — landing at /, demo at /demo
-npm test         # vitest: 73 tests
-npm run build    # production build
+npm run dev        # http://localhost:3000 — landing at /, demo at /demo
+npm test           # vitest: 101 tests (incl. the Phase B audit suite)
+npm run typecheck  # tsc --noEmit
+npm run lint       # eslint (flat config, next/core-web-vitals + next/typescript)
+npm run build      # production build
 ```
+
+CI (`.github/workflows/ci.yml`) runs `npm ci`, typecheck, lint, tests, and
+build on pushes to `harden/**` / `main` and on pull requests.
+
+Input validation: every public planner, the crane scheduler, and the yard
+stacking functions validate their inputs up front (`src/lib/validate.ts`) —
+non-finite numbers, non-positive handling times or lengths, duplicate ids,
+and non-permutation retrieval ranks throw a clear `invalid input` error
+instead of producing a silently invalid plan. Beam and per-berth depth
+limits are not modelled (the `Vessel` type carries LOA and draft only;
+draft ≥ 12 m is enforced via tide windows).
 
 Deploy: push to `main` — the Vercel project builds automatically (`next build`).
 
@@ -212,11 +272,67 @@ Feasibility (length fit, grain capability, no overlaps, tide windows) holds by c
 
 **Economics** (`src/lib/economics.ts`). Fuel proxy: 0.9 t/h at anchor for container vessels, 0.6 t/h for grain. Crane cost: $180 per crane-hour. These are transparent planning proxies, not measured port figures — they exist so the objective can trade waiting against fuel and crane spend.
 
-**Yard stacking** (`src/lib/yard.ts`). Containers are placed latest-retrieval-first onto the stack whose top box has the closest later retrieval rank ("deepest departure at the bottom"). Rehandles are counted by simulating retrievals in rank order. This classic heuristic is optimal for the static stacking problem under mild conditions and decisively beats arrival-order stacking.
+**Yard stacking** (`src/lib/yard.ts`). Containers are placed latest-retrieval-first onto the stack whose top box has the closest later retrieval rank ("deepest departure at the bottom"). Rehandles are counted by simulating retrievals in rank order. This classic heuristic is a strong performer on the static stacking problem and decisively beats arrival-order stacking — but it is a heuristic, not a proven optimum; the relocation simulation grades all three stacking methods empirically.
 
 **Relocation** (`src/lib/relocation.ts`). The legacy blocking count *deletes* blocking boxes when they are lifted aside, so a box can never block twice. The relocation simulation (blocks relocation problem; Caserta, Schwarze & Voß 2012) moves blocking boxes to other stacks — min boxes departing before it, then min height, then lowest index — and counts every move, including re-relocations. A third stacking method, expected-relocation stacking, places each arriving box where it minimises the number of boxes already there that depart before it (each such box will force one relocation of the new arrival when it leaves; cf. Kim 1997). Relocations need a free slot, so the simulation runs with one buffer stack, and charges 3 minutes of crane time per move as the yard's contribution to truck turnaround.
 
 **ETA prediction** (`src/lib/eta.ts`). `predicted = scheduled + max(0, congestion × 16h + jitter)`. Deliberately simple and explainable: the vessel is already en route, so what moves the ETA is port congestion, not sailing physics. Swap in a real AIS feed by replacing one function.
+
+## Validation (Phase D — realistic validation)
+
+Phase D separates *software correctness* (the code honours its own
+constraints) from *real-world accuracy* (the plans match a real terminal).
+All 182 tests pass; the suite below is what backs each claim.
+
+**Exact-solver verification.** The branch-and-bound solver is cross-checked
+against an *independent* exhaustive enumerator (own sweep, own objective —
+only the tide helpers and `berthFeasible` are shared) on every vessel count
+from 2 up to the 8-vessel ceiling, across tight/loose berth counts,
+tide-on/tide-off, draft-heavy and grain-heavy mixes: every instance
+`provenOptimal`, every objective equal to brute force
+(`phased-wider-verification.test.ts`, 13 tests). Any mismatch would be a
+defect; none was found.
+
+**Property-based tests** (`phased-properties.test.ts`, 14 tests, seeded
+`mulberry32` PRNG). Invariants over 25 random instances per planner: no
+berth overlap, dimensions fit, ETA/draft/tide windows respected, totals
+consistent; crane pool never exceeded (re-verified with an independent
+sweep-line); yard relocation moves replayed box-by-box (moved box on top,
+destination has room, served boxes retrievable, yard ends empty).
+Same-seed runs are bit-identical.
+
+**Comparison fairness.** `compareAlgorithms` now enforces fairness instead
+of assuming it: every result carries an `inputFingerprint` of the exact
+instance, weights, tide flag and budget it was graded on; each runner is
+checked before/after for mutations of the shared inputs; and
+`assertFairComparison` throws if results from mismatched
+instances/objectives/budgets are ever mixed
+(`phased-fairness.test.ts`, 7 tests).
+
+**Performance** (`docs/PERFORMANCE.md`, measured 2026-10-17 on 2× AMD EPYC,
+wall-clock in vitest). Exact solver at the 8-vessel ceiling: 6–34 ms,
+thousands of nodes explored, proven optimal. Heuristics at 20/50/100
+vessels: greedy ~1 ms, GA ~0.1 s, annealing ~0.8/1.6/2.7 s, tabu
+~6/11/22 s — all roughly linear. **ALNS is the documented exception:**
+~2 s at 20 vessels, ~36 s at 50, **~535 s (8.9 min) at 100** — a 273×
+slowdown for a 5× size increase. It is excluded from interactive paths at
+100+ vessels until fixed (see `docs/LIMITATIONS.md` L3).
+
+**Real-world data contract** (`src/datasets/`, `docs/DATASETS.md`).
+Versioned zod schemas (`SCHEMA_VERSION = "1.0.0"`) for vessel ETAs, berth
+geometry, crane availability, tide restrictions, and yard snapshots, with
+explicit units (metres, ISO-8601 UTC), required vs optional fields, and an
+exported validator. `toPlannerInputs` converts a dataset to planner input
+and returns every non-data assumption in plain language.
+
+**The honest boundary: no real data exists.** Nothing in
+`fixtures/synthetic/` came from a terminal operator, a port authority, or
+a shipping agent — the fixtures prove the software reads the format and
+plans feasibly from it (software correctness only). What a supervised
+pilot would need, from whom, and the per-criterion MET / NOT MET /
+BLOCKED-ON-REAL-DATA status are in `docs/ACCEPTANCE.md`; the frank list of
+what is unproven (depth-unaware planner, 8-vessel ceiling, ALNS scaling,
+stylised tides, shared crane pool, …) is in `docs/LIMITATIONS.md`.
 
 ## Limitations (honest)
 

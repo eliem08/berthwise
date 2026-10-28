@@ -19,14 +19,14 @@ describe("relocation simulation (RSP)", () => {
   });
 
   it("counts re-relocations the blocking count misses", () => {
-    // Stacks: [1,7] [2,3] [4,5] (bottom -> top), maxHeight 3.
-    // Blocking count: retrieve 1 (1 blocking), retrieve 2 (1 blocking: 7
+    // Stacks: [1,6] [2,3] [4,5] (bottom -> top), maxHeight 3.
+    // Blocking count: retrieve 1 (1 blocking), retrieve 2 (1 blocking: 6
     // already vanished), retrieve 4 (1 blocking) = 3.
-    // Relocation sim: 7 is relocated at retrieve 1, then relocated AGAIN
+    // Relocation sim: 6 is relocated at retrieve 1, then relocated AGAIN
     // at retrieve 2 (it lands above 3), and 5 is relocated at retrieve 4
-    // = 4 moves; box 7 is moved twice.
+    // = 4 moves; box 6 is moved twice.
     const stacks: Box[][] = [
-      [box("B1", 1), box("B7", 7)],
+      [box("B1", 1), box("B6", 6)],
       [box("B2", 2), box("B3", 3)],
       [box("B4", 4), box("B5", 5)],
     ];
@@ -36,8 +36,8 @@ describe("relocation simulation (RSP)", () => {
     expect(relocation.rehandles).toBe(4);
     expect(relocation.boxesRelocatedTwice).toBe(1);
     expect(relocation.maxRelocationsPerBox).toBe(2);
-    const sevenMoves = relocation.moves.filter((m) => m.boxId === "B7");
-    expect(sevenMoves).toHaveLength(2);
+    const sixMoves = relocation.moves.filter((m) => m.boxId === "B6");
+    expect(sixMoves).toHaveLength(2);
   });
 
   it("throws on a completely full yard (no free slot for relocation)", () => {
@@ -50,7 +50,7 @@ describe("relocation simulation (RSP)", () => {
 
   it("never mutates the input yard", () => {
     const stacks: Box[][] = [
-      [box("B1", 1), box("B7", 7)],
+      [box("B1", 1), box("B6", 6)],
       [box("B2", 2), box("B3", 3)],
       [box("B4", 4), box("B5", 5)],
     ];

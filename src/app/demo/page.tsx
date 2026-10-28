@@ -192,7 +192,7 @@ export default function DemoPage() {
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [grainPriority, congestion, seed, tidesEnabled, weights.waiting, weights.fuel, weights.crane]);
+  }, [grainPriority, congestion, seed, tidesEnabled, weights]);
 
   const winnerResult = useMemo(
     () => result?.comparison.results.find((r) => r.id === result.comparison.winner) ?? null,

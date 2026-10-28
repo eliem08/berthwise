@@ -15,16 +15,22 @@ import type {
 
 const fmt = (n: number, digits = 2) => (Number.isFinite(n) ? n.toFixed(digits) : "—");
 
-function GapBadge({ gap }: { gap: number | null }) {
+function GapBadge({ gap, proven }: { gap: number | null; proven: boolean }) {
   if (gap === null) return <span className="text-slate-500">—</span>;
-  if (Math.abs(gap) < 0.005) {
+  // "OPTIMAL" is shown only against a PROVEN optimum. Against an unproven
+  // (node-cap-hit) reference the badge would be a lie, so show the raw gap.
+  if (proven && Math.abs(gap) < 0.005) {
     return (
       <span className="inline-flex rounded-full bg-emerald-400/15 px-2 py-0.5 font-mono text-xs font-bold text-emerald-300">
         OPTIMAL
       </span>
     );
   }
-  return <span className="font-mono text-sm text-signal-300">+{gap.toFixed(1)}%</span>;
+  return (
+    <span className="font-mono text-sm text-signal-300">
+      +{gap.toFixed(1)}%{proven ? "" : " (ref. unproven)"}
+    </span>
+  );
 }
 
 export default function ResearchPanel({
@@ -218,7 +224,7 @@ export default function ResearchPanel({
                         {fmt(g.objective, 3)}
                       </td>
                       <td className="px-3 py-2">
-                        <GapBadge gap={g.gapPct} />
+                        <GapBadge gap={g.gapPct} proven={exact.provenOptimal} />
                       </td>
                     </tr>
                   ))}
@@ -227,11 +233,14 @@ export default function ResearchPanel({
             </div>
             <p className="text-xs leading-relaxed text-slate-500">
               Gap = (heuristic − optimum) / optimum × 100. A gap of 0 means
-              the heuristic found the proven optimum. The exact solver uses
-              canonical-order branch-and-bound: vessels are appended in
-              nondecreasing (start, vessel id) order, which visits each
-              distinct plan exactly once, with an admissible lower bound
-              (placed cost + cheapest possible completion) for pruning.
+              the heuristic found the optimum the solver proved — the green
+              OPTIMAL badge is only shown when the search completed
+              (provenOptimal); gaps against an unproven reference are marked
+              and approximate. The exact solver uses canonical-order
+              branch-and-bound: vessels are appended in nondecreasing (start,
+              vessel id) order, which visits each distinct plan exactly once,
+              with an admissible lower bound (placed cost + cheapest possible
+              completion) for pruning.
             </p>
           </div>
         )}
@@ -298,7 +307,7 @@ export default function ResearchPanel({
                             </td>
                             <td className="px-3 py-2">
                               {r.gapPct !== null ? (
-                                <GapBadge gap={r.gapPct} />
+                                <GapBadge gap={r.gapPct} proven={b.provenOptimal} />
                               ) : (
                                 <span className="text-xs text-slate-500">
                                   no exact reference

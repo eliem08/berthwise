@@ -1,0 +1,22 @@
+# Dependabot: weekly npm dependency updates (Phase C).
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      # Monday 06:00 UTC — before the working week, after the weekend's advisories.
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    # Group non-breaking updates to keep PR noise down; security updates
+    # always arrive as separate PRs regardless of grouping.
+    groups:
+      minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

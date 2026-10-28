@@ -72,8 +72,8 @@ export default function CraneChart({ schedule }: { schedule: CraneSchedule }) {
               contentStyle={TOOLTIP_STYLE}
               labelStyle={{ color: "#e2e8f0", fontWeight: 600 }}
               itemStyle={{ color: "#cbd5e1" }}
-              formatter={(value: number | string) => [`${value} cranes`, "In use"]}
-              labelFormatter={(v: number) => `h+${v}`}
+              formatter={(value) => [`${value ?? "–"} cranes`, "In use"]}
+              labelFormatter={(v) => `h+${v}`}
               cursor={{ fill: "#122540" }}
             />
             <ReferenceLine

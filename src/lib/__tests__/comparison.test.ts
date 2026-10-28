@@ -23,7 +23,7 @@ function assertPlanFeasible(plan: BerthPlan): void {
     if (list) list.push(a);
     else byBerth.set(a.berthId, [a]);
   }
-  for (const [berthId, list] of byBerth) {
+  for (const [, list] of byBerth) {
     const sorted = [...list].sort((x, y) => x.startHours - y.startHours);
     for (let i = 1; i < sorted.length; i++) {
       expect(sorted[i].startHours).toBeGreaterThanOrEqual(sorted[i - 1].endHours - EPS);

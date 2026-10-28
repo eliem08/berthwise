@@ -12,6 +12,7 @@ import type {
   Vessel,
 } from "./types";
 import { mulberry32 } from "./rng";
+import { assertPlanningInputs } from "./validate";
 import { generateTideWindows, isInTideWindow, needsTideWindow, nextTideWindowStart } from "./tide";
 import { planEconomics, cranesForVessel, CRANE_POOL_LIMIT } from "./economics";
 import { cranesFreeAt, scheduleCranes } from "./cranes";
@@ -181,6 +182,7 @@ export function sequencesToPlan(
   vessels: Vessel[],
   opts: SequenceSweepOptions = {},
 ): BerthPlan {
+  assertPlanningInputs(vessels, []);
   const vesselMap = new Map<string, Vessel>();
   for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
   return buildPlan(seqs, vesselMap, opts);
@@ -283,6 +285,7 @@ function sweepOpts(opts: PlanOptions): SweepOptions {
  * earliest. This is the "greedy" algorithm in the comparison view.
  */
 export function planNaive(vessels: Vessel[], berths: Berth[], opts: PlanOptions = {}): BerthPlan {
+  assertPlanningInputs(vessels, berths);
   const vesselMap = new Map<string, Vessel>();
   for (const vessel of vessels) vesselMap.set(vessel.id, vessel);
 
@@ -408,6 +411,7 @@ export function planOptimized(
   const seed = opts.seed ?? DEFAULT_SEED;
   const timeLimitMs = opts.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
 
+  assertPlanningInputs(vessels, berths);
   if (vessels.length === 0 || berths.length === 0) {
     return buildPlan(new Map(), new Map(), sweepOpts(opts));
   }
@@ -477,13 +481,13 @@ export function planTabu(
   if (s.ctx.movable.length === 0) return s.bestPlan;
 
   let currentSeqs = s.currentSeqs;
-  let currentCost = s.currentCost;
   let bestPlan = s.bestPlan;
   let bestCost = s.bestCost;
 
   // (vesselId|berthId) -> iteration after which the move is allowed again.
   const tabuUntil = new Map<string, number>();
   const rand = mulberry32(seed + 7919);
+  assertPlanningInputs(vessels, berths);
   const maxIterations = Math.max(64, Math.floor(timeLimitMs * ITERATIONS_PER_MS));
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -511,7 +515,6 @@ export function planTabu(
     if (bestMove === null) continue;
 
     currentSeqs = bestMove.nextSeqs;
-    currentCost = bestMove.cost;
     s.ctx.location.set(bestMove.vesselId, bestMove.targetBerthId);
     tabuUntil.set(`${bestMove.vesselId}|${bestMove.targetBerthId}`, iteration + TABU_TENURE);
 
@@ -529,14 +532,22 @@ export function planTabu(
  * on the same vessel set with the same weights, crane-schedule every plan
  * against the shared pool, and pick the winner by weighted objective (ties
  * resolved in greedy → annealing → tabu → GA → ALNS order, deterministic).
+ *
+ * Fairness is enforced, not just assumed: every result carries an
+ * `inputFingerprint` of the exact instance, weights, tide flag and time
+ * budget it was graded on, and each runner is checked before/after for
+ * mutations of the shared input arrays (a planner that sorted or spliced
+ * its input in place would silently corrupt every runner after it).
  */
 export function compareAlgorithms(
   vessels: Vessel[],
   berths: Berth[],
   opts: PlanOptions = {},
 ): ComparisonResult {
+  assertPlanningInputs(vessels, berths);
   const weights = opts.weights ?? { waiting: 1, fuel: 0, crane: 0 };
   const tidesEnabled = opts.tidesEnabled ?? false;
+  const fingerprint = comparisonFingerprint(vessels, berths, opts);
 
   const runners: Array<{ id: AlgorithmId; label: string; fn: (v: Vessel[], b: Berth[]) => BerthPlan }> = [
     { id: "greedy", label: "Greedy (FCFS)", fn: (v, b) => planNaive(v, b, opts) },
@@ -547,7 +558,15 @@ export function compareAlgorithms(
   ];
 
   const results: AlgorithmResult[] = runners.map((runner) => {
+    const before = canonicalInstanceString(vessels, berths);
     const rawPlan = runner.fn(vessels, berths);
+    const after = canonicalInstanceString(vessels, berths);
+    if (before !== after) {
+      throw new Error(
+        `comparison fairness violation: ${runner.id} mutated the shared planning inputs; ` +
+          "all runners must see identical instances",
+      );
+    }
     const { plan, schedule } = scheduleCranes(rawPlan, vessels, berths, {
       poolLimit: CRANE_POOL_LIMIT,
       tidesEnabled,
@@ -558,8 +577,11 @@ export function compareAlgorithms(
       plan,
       craneSchedule: schedule,
       economics: planEconomics(plan, vessels, berths, weights),
+      inputFingerprint: fingerprint,
     };
   });
+
+  assertFairComparison(results);
 
   let winner: AlgorithmId = "greedy";
   let winnerCost = Number.POSITIVE_INFINITY;
@@ -571,6 +593,85 @@ export function compareAlgorithms(
   }
 
   return { results, winner };
+}
+
+/**
+ * FNV-1a 32-bit hash (pure JS: berth.ts is bundled for the browser, so no
+ * node:crypto here). Used only for fairness fingerprinting, not security.
+ */
+function fnv1a(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Canonical, order-independent rendering of a (vessels, berths) instance:
+ * two structurally identical inputs hash the same regardless of array order.
+ */
+export function canonicalInstanceString(vessels: Vessel[], berths: Berth[]): string {
+  const vs = vessels
+    .map((v) =>
+      [v.id, v.name, v.line, v.etaHours, v.lengthM, v.draftM, v.cargo, v.handlingHours, v.teu, v.origin].join(
+        "|",
+      ),
+    )
+    .sort()
+    .join(";");
+  const bs = berths
+    .map((b) => [b.id, b.name, b.lengthM, b.grainCapable, b.cranes].join("|"))
+    .sort()
+    .join(";");
+  return vs + "#" + bs;
+}
+
+/**
+ * Fingerprint of everything a comparison grade depends on: the instance,
+ * the objective weights, the tide flag, and the optimisation budgets
+ * (timeLimitMs, seed). Two results with equal fingerprints were graded on
+ * identical instances, objectives and budgets.
+ */
+export function comparisonFingerprint(vessels: Vessel[], berths: Berth[], opts: PlanOptions = {}): string {
+  const weights = opts.weights ?? { waiting: 1, fuel: 0, crane: 0 };
+  return fnv1a(
+    canonicalInstanceString(vessels, berths) +
+      "#" +
+      JSON.stringify({
+        weights,
+        tidesEnabled: opts.tidesEnabled ?? false,
+        timeLimitMs: opts.timeLimitMs ?? null,
+        seed: opts.seed ?? null,
+      }),
+  );
+}
+
+/**
+ * Fail loudly if a comparison mixes results graded on different instances,
+ * objectives, or budgets. Every result from `compareAlgorithms` carries its
+ * fingerprint, so a mixed bag can only arise from hand-assembled results —
+ * exactly the mistake this guard exists to catch.
+ */
+export function assertFairComparison(results: AlgorithmResult[]): void {
+  if (results.length === 0) {
+    throw new Error("fair comparison: no results to compare");
+  }
+  const first = results[0].inputFingerprint;
+  if (!first) {
+    throw new Error(
+      "fair comparison: result missing inputFingerprint (not produced by compareAlgorithms?)",
+    );
+  }
+  for (const r of results) {
+    if (r.inputFingerprint !== first) {
+      throw new Error(
+        `fair comparison: mismatched comparison — ${r.id} was graded on a different ` +
+          `instance/objective/budget than ${results[0].id}; refusing to pick a winner`,
+      );
+    }
+  }
 }
 
 /**
@@ -587,6 +688,7 @@ export function validateMove(
   requestedStart: number,
   opts: { poolLimit?: number; tidesEnabled?: boolean; tideWindows?: TideWindow[] } = {},
 ): DragValidation {
+  assertPlanningInputs(vessels, berths);
   const vesselById = new Map(vessels.map((v) => [v.id, v]));
   const berthById = new Map(berths.map((b) => [b.id, b]));
   const vessel = vesselById.get(vesselId);
@@ -665,6 +767,7 @@ export function rebuildAfterMove(
   requestedStart: number,
   opts: PlanOptions = {},
 ): { plan: BerthPlan; craneSchedule: ReturnType<typeof scheduleCranes>["schedule"] } {
+  assertPlanningInputs(vessels, berths);
   const seqs = new Map<string, string[]>();
   for (const berth of berths) seqs.set(berth.id, []);
 

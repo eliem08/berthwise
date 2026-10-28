@@ -1,5 +1,6 @@
 import type { Box, RelocationResult, StackingMethodRow, YardSolution } from "./types";
 import { countRehandles, stackNaive, stackOptimized } from "./yard";
+import { assertRankPermutation } from "./validate";
 
 /**
  * The container relocation problem (RSP), a.k.a. blocks relocation problem
@@ -38,6 +39,10 @@ export const MINUTES_PER_REHANDLE = 3;
  * a stack past it. Throws on deadlock (no free slot anywhere).
  */
 export function simulateRelocations(stacks: Box[][], maxHeight: number): RelocationResult {
+  assertRankPermutation(stacks.flat());
+  if (!Number.isFinite(maxHeight) || maxHeight < 1) {
+    throw new Error(`invalid yard: maxHeight must be >= 1 (received ${String(maxHeight)})`);
+  }
   const yard: Box[][] = stacks.map((stack) => stack.map((box) => ({ ...box })));
   const total = yard.reduce((s, stack) => s + stack.length, 0);
   const moves: RelocationResult["moves"] = [];
@@ -132,6 +137,7 @@ export function stackByExpectedRelocations(
   if (!Number.isFinite(maxHeight) || maxHeight < 1) {
     throw new Error(`invalid yard: maxHeight must be >= 1 (received ${String(maxHeight)})`);
   }
+  assertRankPermutation(boxes);
   const stacks: Box[][] = Array.from({ length: stackCount }, () => []);
   for (const box of boxes) {
     let target = -1;

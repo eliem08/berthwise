@@ -128,6 +128,13 @@ export interface AlgorithmResult {
   plan: BerthPlan;
   craneSchedule: CraneSchedule;
   economics: PlanEconomics;
+  /**
+   * Fairness provenance: fingerprint of the instance, objective weights,
+   * tide flag and optimisation budget this result was graded on. Results
+   * with equal fingerprints were compared on identical terms; see
+   * assertFairComparison in berth.ts.
+   */
+  inputFingerprint?: string;
 }
 
 export interface ComparisonResult {

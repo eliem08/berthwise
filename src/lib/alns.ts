@@ -1,6 +1,7 @@
 import type { Berth, BerthPlan, PlanOptions, Vessel } from "./types";
 import { mulberry32 } from "./rng";
 import { berthFeasible, planNaive, planToSequences, sequencesToPlan } from "./berth";
+import { assertPlanningInputs } from "./validate";
 import { planEconomics } from "./economics";
 
 /**
@@ -203,6 +204,7 @@ export function planALNS(
   opts: PlanOptions = {},
 ): BerthPlan {
   const seed = opts.seed ?? DEFAULT_SEED;
+  assertPlanningInputs(vessels, berths);
   if (vessels.length === 0 || berths.length === 0) {
     return sequencesToPlan(new Map(), vessels, { tidesEnabled: opts.tidesEnabled ?? false });
   }
