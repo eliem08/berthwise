@@ -9,16 +9,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
-      - run: npm ci
-      # Dependency vulnerability gate (Phase C): fails the build when the
-      # npm registry reports any HIGH or CRITICAL severity advisory for this
-      # dependency tree. Threshold is deliberately --audit-level=high, not
-      # moderate/low, to keep the signal actionable; moderate/low findings
-      # are still visible in the step output for triage.
-      # Audit is informational: upstream advisories must not block validation
-      # of the project's own code. Remediation via Dependabot PRs.
-      - run: npm audit --audit-level=high || echo "::warning::npm audit reported high/critical advisories (non-blocking)"
-      - run: npm run typecheck --if-present
-      - run: npm run lint --if-present
-      - run: npm test
-      - run: npm run build
+      - name: Install (clean, lockfile-exact)
+        run: npm ci
+      # Security gate (BLOCKING): any HIGH or CRITICAL advisory in the full
+      # dependency tree (prod + dev tooling) fails CI. There are currently no
+      # exceptions. If an unfixable advisory ever has to be tolerated, scope it
+      # explicitly (advisory ID + reason + expiry) in docs/LIMITATIONS.md and
+      # gate it here by ID; do not turn this step into a warning.
+      - name: Security audit (fails on high/critical)
+        run: npm audit --audit-level=high
+      - name: Audit report (all severities, informational)
+        if: always()
+        run: npm audit || true
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm test
+      - name: Production build
+        run: npm run build
